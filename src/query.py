@@ -12,8 +12,15 @@ from src.config import (
     CONTEXT_MAX_CHARS, CONTEXT_MAX_CHUNK_CHARS,
     VECTOR_K, BM25_K, RERANK_TOP_K, RERANKER_MODEL,
     ENABLE_QUERY_REWRITE, REWRITE_MAX_WORDS,
-    BM25_PAGE_SIZE, BM25_MAX_DOCS
+    BM25_PAGE_SIZE, BM25_MAX_DOCS,
+    LLM_PROVIDER, GOOGLE_API_KEY
 )
+
+import google.generativeai as genai
+
+if GOOGLE_API_KEY:
+    genai.configure(api_key=GOOGLE_API_KEY)
+
 
 _EMBED_MODEL = None
 _CHROMA_CLIENT = None
@@ -131,6 +138,17 @@ def _call_ollama(prompt: str, system_prompt: str = "") -> str:
     return cleaned if cleaned else raw
 
 
+def _call_gemini(prompt: str, system_prompt: str = "") -> str:
+    try:
+        model = genai.GenerativeModel("gemini-1.5-flash")
+        full_prompt = f"Instructions système:\n{system_prompt}\n\nQuestion et contexte:\n{prompt}" if system_prompt else prompt
+        response = model.generate_content(full_prompt)
+        return response.text.strip()
+    except Exception as e:
+        print(f"[RAG] Gemini error: {e}")
+        raise e
+
+
 def _get_reranker():
     global _RERANKER
     if _RERANKER is None:
@@ -153,7 +171,10 @@ def _rewrite_query(question: str) -> str:
             "Tu es un assistant de recherche. Reformule la question en une requete courte et claire, "
             "sans ajouter d'informations. Reponds par une seule ligne, sans guillemets."
         )
-        rewritten = _call_ollama(question, system_prompt=system_instruction).strip().splitlines()[0].strip()
+        if LLM_PROVIDER.lower() == "gemini":
+            rewritten = _call_gemini(question, system_prompt=system_instruction).strip().splitlines()[0].strip()
+        else:
+            rewritten = _call_ollama(question, system_prompt=system_instruction).strip().splitlines()[0].strip()
         return rewritten if rewritten else question
     except Exception:
         return question
@@ -302,13 +323,17 @@ def warmup_models():
     _get_bm25_index(col)
     print(f"[RAG]   OK BM25 index built              ({time.time() - t:.1f}s)")
 
-    # Warm Ollama by sending a tiny prompt so the model is loaded in memory
+    # Warm LLM by sending a tiny prompt so the model is loaded in memory
     t = time.time()
     try:
-        _call_ollama("ping", system_prompt="Reply with 'pong' only.")
-        print(f"[RAG]   OK Ollama model warmed          ({time.time() - t:.1f}s)")
+        if LLM_PROVIDER.lower() == "gemini":
+            _call_gemini("ping", system_prompt="Reply with 'pong' only.")
+            print(f"[RAG]   OK Gemini model warmed          ({time.time() - t:.1f}s)")
+        else:
+            _call_ollama("ping", system_prompt="Reply with 'pong' only.")
+            print(f"[RAG]   OK Ollama model warmed          ({time.time() - t:.1f}s)")
     except Exception as e:
-        print(f"[RAG]   WARN Ollama warm-up failed: {e}")
+        print(f"[RAG]   WARN LLM warm-up failed: {e}")
 
     print(f"[RAG] All models ready in {time.time() - t0:.1f}s")
 
@@ -409,16 +434,19 @@ def answer_question(question: str) -> dict:
     # 7. Build user message
     user_message = f"Contexte:\n{context_str}\n\nQuestion: {question}"
 
-    # 8. Call Ollama API (LLM generation)
+    # 8. Call LLM (Gemini or Ollama)
     t = time.time()
     try:
-        answer = _call_ollama(user_message, system_prompt=_build_system_prompt())
+        if LLM_PROVIDER.lower() == "gemini":
+            answer = _call_gemini(user_message, system_prompt=_build_system_prompt())
+        else:
+            answer = _call_ollama(user_message, system_prompt=_build_system_prompt())
     except Exception as e:
         error_text = str(e)
         if "Connection" in error_text or "ConnectionRefusedError" in error_text:
             fallback = (
-                "Le service Ollama est inaccessible. Assurez-vous qu'il est lancé "
-                "et que le modèle est téléchargé."
+                "Le service LLM est inaccessible. Assurez-vous qu'il est configuré "
+                "et lancé correctement."
             )
         else:
             fallback = _extractive_answer(retrieved_chunks) or (

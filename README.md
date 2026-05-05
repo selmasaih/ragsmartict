@@ -14,7 +14,7 @@ Un assistant intelligent basé sur l'architecture RAG pour interroger vos notes 
 - ✂️ **Découpage intelligent :** Utilisation de `RecursiveCharacterTextSplitter` pour découper le texte de manière sémantique.
 - 🧠 **Embeddings Multilingues :** Encodage avec le modèle `intfloat/multilingual-e5-small`.
 - 🗄️ **Base de Données Vectorielle :** Stockage local persistant avec ChromaDB.
-- 🤖 **Génération de Réponses :** Intégration de l'API Google Gemini (`gemini-1.5-flash`) pour générer des réponses en français.
+- 🤖 **Génération de Réponses :** Supporte à la fois un modèle local via **Ollama** (ex: `lfm2.5-thinking`) pour la confidentialité totale, et l'API **Google Gemini** (`gemini-1.5-flash`) pour des performances rapides.
 - 🏷️ **Citations :** Chaque réponse est accompagnée de la source (nom du fichier et page).
 - 💻 **Interface Utilisateur :** Interface web interactive développée avec Streamlit.
 
@@ -32,7 +32,7 @@ Pour plus de détails, consultez [Architecture](docs/architecture.md).
 
 ### Prérequis
 - Python 3.11
-- Une clé API Google Gemini
+- Un fournisseur LLM local (Ollama) ou cloud (Google Gemini API)
 
 ### Étapes d'installation
 1. Clonez ce dépôt.
@@ -42,7 +42,7 @@ Pour plus de détails, consultez [Architecture](docs/architecture.md).
    source venv/bin/activate  # Sur Windows: venv\Scripts\activate
    pip install -r requirements.txt
    ```
-3. Créez un fichier `.env` basé sur `.env.example` et ajoutez votre clé API Google.
+3. Créez un fichier `.env` basé sur `.env.example` et configurez votre fournisseur (`LLM_PROVIDER="ollama"` ou `"gemini"`). Si vous utilisez Gemini, ajoutez votre `GOOGLE_API_KEY`.
 4. Placez vos PDF dans le dossier `notes/` (ex: `notes/signal_processing/`).
 
 ### Ingestion des données

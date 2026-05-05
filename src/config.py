@@ -18,6 +18,9 @@ CHUNK_OVERLAP = 100
 TOP_K = 5
 EMBEDDING_MODEL = "intfloat/multilingual-e5-small"
 
+# LLM Provider ("ollama" or "gemini")
+LLM_PROVIDER = os.getenv("LLM_PROVIDER", "ollama")
+
 # Ollama (LLM)
 # NOTE: On CPU, large models can be extremely slow on prompt evaluation.
 # This default is a small local model; we cap generation to avoid multi-minute "thinking" outputs.
