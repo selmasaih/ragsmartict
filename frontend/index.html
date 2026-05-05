@@ -1,0 +1,51 @@
+<!DOCTYPE html>
+<html lang="fr">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+    <title>INPT Smart ICT RAG</title>
+  </head>
+  <body>
+    <div id="app">
+      <div class="background-elements">
+        <div class="blob blob-1"></div>
+        <div class="blob blob-2"></div>
+      </div>
+      
+      <main class="chat-container">
+        <header class="chat-header glass">
+          <div class="header-info">
+            <h1><i data-lucide="book-open-check"></i> INPT Smart ICT Notes</h1>
+            <p class="subtitle">Assistant Virtuel RAG propulsé par Ollama</p>
+          </div>
+          <div class="doc-stats">
+            <i data-lucide="database"></i>
+            <span id="doc-count">...</span> chunks indexés
+          </div>
+        </header>
+
+        <div class="chat-box glass" id="chat-box">
+          <div class="message assistant-message">
+            <div class="avatar"><i data-lucide="bot"></i></div>
+            <div class="message-content">
+              <p>Bonjour ! Je suis votre assistant pour le cours Smart ICT. Posez-moi vos questions sur le Traitement du Signal ou d'autres sujets indexés !</p>
+            </div>
+          </div>
+        </div>
+
+        <div class="input-container glass">
+          <form id="chat-form">
+            <input type="text" id="question-input" placeholder="Posez votre question ici (ex: Qu'est-ce que la transformée de Fourier ?)..." autocomplete="off" />
+            <button type="submit" id="send-button">
+              <i data-lucide="send"></i>
+            </button>
+          </form>
+        </div>
+      </main>
+    </div>
+    <script type="module" src="/src/main.js"></script>
+  </body>
+</html>

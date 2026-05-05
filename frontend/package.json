@@ -1,0 +1,18 @@
+{
+  "name": "inpt-smart-ict-rag-frontend",
+  "private": true,
+  "version": "0.0.0",
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build",
+    "preview": "vite preview"
+  },
+  "devDependencies": {
+    "vite": "^5.2.0"
+  },
+  "dependencies": {
+    "lucide": "^0.370.0",
+    "marked": "^12.0.2"
+  }
+}
