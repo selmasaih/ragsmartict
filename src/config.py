@@ -12,44 +12,38 @@ BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 CHROMA_DB_PATH = os.path.join(BASE_DIR, "chroma_db")
 NOTES_PATH = os.path.join(BASE_DIR, "notes")
 
-# Constants
-CHUNK_SIZE = 800
-CHUNK_OVERLAP = 100
-TOP_K = 5
-EMBEDDING_MODEL = "intfloat/multilingual-e5-small"
-
-# LLM Provider ("ollama" or "gemini")
+# ── LLM provider ("ollama" or "gemini") ──────────────────────────────
 LLM_PROVIDER = os.getenv("LLM_PROVIDER", "ollama")
 
-# Ollama (LLM)
-# NOTE: On CPU, large models can be extremely slow on prompt evaluation.
-# This default is a small local model; we cap generation to avoid multi-minute "thinking" outputs.
-OLLAMA_MODEL = os.getenv("OLLAMA_MODEL", "lfm2.5-thinking:latest")
-OLLAMA_API_URL = os.getenv("OLLAMA_API_URL", "http://127.0.0.1:11434/api/generate")
-OLLAMA_KEEP_ALIVE = os.getenv("OLLAMA_KEEP_ALIVE", "30m")
-OLLAMA_TIMEOUT_S = float(os.getenv("OLLAMA_TIMEOUT_S", "30"))
+# ── Ollama settings ──────────────────────────────────────────────────
+OLLAMA_MODEL = os.getenv("OLLAMA_MODEL", "llama3.2:3b")
+OLLAMA_API_URL = os.getenv("OLLAMA_API_URL", "http://localhost:11434/api/generate")
+OLLAMA_KEEP_ALIVE = "10m"
+OLLAMA_TIMEOUT_S = 300
+OLLAMA_NUM_PREDICT = 200          # max tokens — shorter = faster
+OLLAMA_TEMPERATURE = 0.3
+OLLAMA_TOP_P = 0.9
+OLLAMA_TOP_K = 40
 
-# Generation controls (lower values = faster)
-# 512 is a practical cap that typically allows closing </think> + emitting the final answer.
-OLLAMA_NUM_PREDICT = int(os.getenv("OLLAMA_NUM_PREDICT", "512"))
-OLLAMA_TEMPERATURE = float(os.getenv("OLLAMA_TEMPERATURE", "0.05"))
-OLLAMA_TOP_P = float(os.getenv("OLLAMA_TOP_P", "0.9"))
-OLLAMA_TOP_K = int(os.getenv("OLLAMA_TOP_K", "50"))
-
-# Context trimming (reduces prompt_eval time on CPU)
-CONTEXT_MAX_CHARS = int(os.getenv("CONTEXT_MAX_CHARS", "1400"))
-CONTEXT_MAX_CHUNK_CHARS = int(os.getenv("CONTEXT_MAX_CHUNK_CHARS", "350"))
-
+# ── Embedding / Chunking ─────────────────────────────────────────────
+CHUNK_SIZE = 800
+CHUNK_OVERLAP = 100
+EMBEDDING_MODEL = "intfloat/multilingual-e5-small"
 COLLECTION_NAME = "inpt_notes"
 
-# Retrieval settings  (tuned for speed)
-VECTOR_K = int(os.getenv("VECTOR_K", "2"))
-BM25_K = int(os.getenv("BM25_K", "2"))
-RERANK_TOP_K = int(os.getenv("RERANK_TOP_K", "2"))
+# ── Retrieval settings ───────────────────────────────────────────────
+TOP_K = 5
+VECTOR_K = 10                     # was 15 — fewer vector candidates
+BM25_K = 10                       # was 25 — fewer BM25 candidates
+RERANK_TOP_K = 5                  # was 6
 RERANKER_MODEL = "cross-encoder/mmarco-mMiniLMv2-L12-H384-v1"
 BM25_PAGE_SIZE = 5000
-BM25_MAX_DOCS = 20000
+BM25_MAX_DOCS = 20000             # was 50000 — halved
 
-# Query rewrite  (disabled — saves one full Ollama round-trip per query)
+# ── Context window limits ────────────────────────────────────────────
+CONTEXT_MAX_CHARS = 4000          # total context sent to LLM
+CONTEXT_MAX_CHUNK_CHARS = 800     # per-chunk cap
+
+# ── Query rewrite (DISABLED — saves a full LLM round-trip) ──────────
 ENABLE_QUERY_REWRITE = False
 REWRITE_MAX_WORDS = 10
