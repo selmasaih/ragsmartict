@@ -10,7 +10,7 @@ from src.config import (
     OLLAMA_KEEP_ALIVE, OLLAMA_TIMEOUT_S,
     OLLAMA_NUM_PREDICT, OLLAMA_TEMPERATURE, OLLAMA_TOP_P, OLLAMA_TOP_K,
     CONTEXT_MAX_CHARS, CONTEXT_MAX_CHUNK_CHARS,
-    VECTOR_K, BM25_K, RERANK_TOP_K, RERANKER_MODEL,
+    VECTOR_K, BM25_K, RERANK_TOP_K, RERANKER_MODEL, ENABLE_RERANK,
     ENABLE_QUERY_REWRITE, REWRITE_MAX_WORDS,
     BM25_PAGE_SIZE, BM25_MAX_DOCS,
     LLM_PROVIDER, GOOGLE_API_KEY
@@ -140,7 +140,7 @@ def _call_ollama(prompt: str, system_prompt: str = "") -> str:
 
 def _call_gemini(prompt: str, system_prompt: str = "") -> str:
     try:
-        model = genai.GenerativeModel("gemini-1.5-flash")
+        model = genai.GenerativeModel("gemini-2.0-flash")
         full_prompt = f"Instructions système:\n{system_prompt}\n\nQuestion et contexte:\n{prompt}" if system_prompt else prompt
         response = model.generate_content(full_prompt)
         return response.text.strip()
@@ -311,17 +311,23 @@ def warmup_models():
     _get_embedding_model()
     print(f"[RAG]   OK Embedding model loaded       ({time.time() - t:.1f}s)")
 
-    t = time.time()
-    _get_reranker()
-    print(f"[RAG]   OK Reranker loaded               ({time.time() - t:.1f}s)")
+    if ENABLE_RERANK:
+        t = time.time()
+        _get_reranker()
+        print(f"[RAG]   OK Reranker loaded               ({time.time() - t:.1f}s)")
+    else:
+        print("[RAG]   SKIP Reranker (disabled)")
 
     t = time.time()
     col = _get_collection()
     print(f"[RAG]   OK ChromaDB collection loaded    ({time.time() - t:.1f}s)")
 
-    t = time.time()
-    _get_bm25_index(col)
-    print(f"[RAG]   OK BM25 index built              ({time.time() - t:.1f}s)")
+    if BM25_K > 0:
+        t = time.time()
+        _get_bm25_index(col)
+        print(f"[RAG]   OK BM25 index built              ({time.time() - t:.1f}s)")
+    else:
+        print("[RAG]   SKIP BM25 index (disabled)")
 
     # Warm LLM by sending a tiny prompt so the model is loaded in memory
     t = time.time()
@@ -381,9 +387,12 @@ def answer_question(question: str) -> dict:
     vector_candidates = _collect_vector_candidates(results)
     timings["vector_retrieval_ms"] = int((time.time() - t) * 1000)
 
-    # 4. BM25 retrieval
+    # 4. BM25 retrieval (skip if BM25_K == 0)
     t = time.time()
-    bm25_candidates = _collect_bm25_candidates(collection, query_text)
+    if BM25_K > 0:
+        bm25_candidates = _collect_bm25_candidates(collection, query_text)
+    else:
+        bm25_candidates = []
     timings["bm25_retrieval_ms"] = int((time.time() - t) * 1000)
 
     # 5. Merge candidates
@@ -394,11 +403,17 @@ def answer_question(question: str) -> dict:
     if not candidates:
         return {"answer": "Aucun document pertinent trouvé dans la base de données.", "sources": [], "latency_ms": int((time.time() - start_time) * 1000)}
 
-    # 6. Rerank
+    # 6. Rerank (skip if ENABLE_RERANK is False)
     t = time.time()
-    try:
-        retrieved_chunks, metadatas = _rerank_candidates(query_text, candidates)
-    except Exception:
+    if ENABLE_RERANK:
+        try:
+            retrieved_chunks, metadatas = _rerank_candidates(query_text, candidates)
+        except Exception:
+            candidates.sort(key=lambda c: c["score"], reverse=True)
+            top = candidates[:TOP_K]
+            retrieved_chunks = [c["doc"] for c in top]
+            metadatas = [c["meta"] for c in top]
+    else:
         candidates.sort(key=lambda c: c["score"], reverse=True)
         top = candidates[:TOP_K]
         retrieved_chunks = [c["doc"] for c in top]
@@ -464,9 +479,6 @@ def answer_question(question: str) -> dict:
 
     # Log per-step timings
     print(f"[RAG] Timings: {timings}  |  Total: {latency_ms}ms")
-
-    if _looks_like_reasoning(answer):
-        answer = _extractive_answer(retrieved_chunks) or answer
 
     # 9. Return response
     return {
