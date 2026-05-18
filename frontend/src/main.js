@@ -8,7 +8,7 @@ createIcons({
   nameAttr: 'data-lucide'
 });
 
-const API_BASE = 'http://127.0.0.1:8003/api';
+const API_BASE = 'http://127.0.0.1:8000/api';
 
 const chatBox = document.getElementById('chat-box');
 const chatForm = document.getElementById('chat-form');
@@ -105,6 +105,8 @@ function removeTypingIndicator() {
   if (indicator) indicator.remove();
 }
 
+let chatHistory = [];
+
 chatForm.addEventListener('submit', async (e) => {
   e.preventDefault();
   const question = questionInput.value.trim();
@@ -120,7 +122,10 @@ chatForm.addEventListener('submit', async (e) => {
     const res = await fetch(`${API_BASE}/query`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ question })
+      body: JSON.stringify({ 
+        question: question,
+        history: chatHistory 
+      })
     });
 
     const data = await res.json();
@@ -128,11 +133,18 @@ chatForm.addEventListener('submit', async (e) => {
 
     if (res.ok) {
       appendMessage('assistant', marked.parse(data.answer), data.latency_ms, data.sources);
+      // Update history
+      chatHistory.push({ role: "user", content: question });
+      chatHistory.push({ role: "assistant", content: data.answer });
+      // Keep only last 6 messages
+      if (chatHistory.length > 6) {
+        chatHistory = chatHistory.slice(chatHistory.length - 6);
+      }
     } else {
       appendMessage('assistant', `<p style="color: #ef4444;">Erreur: ${data.detail || 'Erreur serveur'}</p>`);
     }
   } catch (error) {
     removeTypingIndicator();
-    appendMessage('assistant', `<p style="color: #ef4444;">Impossible de se connecter au serveur Backend. Assurez-vous que FastAPI est lance sur le port 8002.</p>`);
+    appendMessage('assistant', `<p style="color: #ef4444;">Impossible de se connecter au serveur Backend. Assurez-vous que FastAPI est lance sur le port 8000.</p>`);
   }
 });
