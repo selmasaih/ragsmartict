@@ -1,69 +1,68 @@
 # INPT Smart ICT Notes RAG
 
-Un assistant intelligent basé sur l'architecture RAG pour interroger vos notes de cours de la filière Smart ICT à l'INPT.
-*A smart RAG-based assistant to query your INPT Smart ICT course notes.*
+A smart virtual assistant based on the RAG (Retrieval-Augmented Generation) architecture to query your INPT Smart ICT course notes.
 
-## ✨ Fonctionnalités et Améliorations Récentes
+## ✨ Features and Recent Improvements
 
-- 📄 **Ingestion Optimisée :** Extraction de texte avec `RecursiveCharacterTextSplitter`. Traitement par lots (Batch Encoding) des embeddings pour réduire massivement le temps d'ingestion.
-- 🚀 **Retrieval Parallèle Hybride :** Recherche simultanée dans ChromaDB (Vectoriel) et via BM25 (Lexical) avec un `ThreadPoolExecutor` pour minimiser la latence.
-- 🧠 **Mémoire Conversationnelle :** L'assistant mémorise le contexte des messages précédents pour vous permettre de poser des questions de suivi naturellement.
-- 💎 **Interface Utilisateur Premium :** Nouvelle interface web (Vite) avec un design dark glassmorphism très esthétique, typographie moderne et animations fluides.
-- 🗄️ **Base de Données Vectorielle :** Stockage local persistant avec ChromaDB.
-- 🤖 **Génération de Réponses :** Supporte le local via **Ollama** (`llama3.2:3b` ou autre) ou le cloud via l'API **Google Gemini**.
-- 🏷️ **Citations :** Chaque réponse est accompagnée de sa source (nom du document et page).
+- 📄 **Optimized Ingestion:** Text extraction using `RecursiveCharacterTextSplitter`. Employs batch encoding for embeddings to massively reduce document ingestion time.
+- 🚀 **Parallel Hybrid Retrieval:** Simultaneous search in ChromaDB (Vector) and BM25 (Lexical) using a `ThreadPoolExecutor` to minimize latency.
+- 🧠 **Conversational Memory:** The assistant remembers the context of previous messages, allowing you to ask follow-up questions naturally.
+- 💎 **Premium User Interface:** A brand new web interface (Vite) featuring a stunning dark glassmorphism design, modern typography, and smooth animations.
+- 🗄️ **Vector Database:** Persistent local storage with ChromaDB.
+- 🤖 **Response Generation:** Supports local models via **Ollama** (`llama3.2:3b` or similar) for total privacy, or cloud generation via the **Google Gemini API**.
+- 🏷️ **Citations:** Every response is accompanied by its source (document name and page number).
 
 ## 🏗️ Architecture
 
-1. **Backend (FastAPI) :** API REST asynchrone gérant le RAG, exposée sur le port `8000`.
-2. **Frontend (Vite) :** Interface utilisateur moderne (HTML/CSS/Vanilla JS) connectée au backend.
-3. **Pipeline RAG :**
-   - **Ingestion :** Ingestion batch dans ChromaDB (`src/ingest.py`).
-   - **Récupération (Retrieval) :** Recherche parallèle BM25 + Vectorielle, puis Cross-Encoder Re-Ranking (`src/query.py`).
-   - **Génération :** LLM augmenté de l'historique de conversation (Mémoire).
+1. **Backend (FastAPI):** Asynchronous REST API managing the RAG pipeline, exposed on port `8000`.
+2. **Frontend (Vite):** Modern user interface (HTML/CSS/Vanilla JS) connected to the backend.
+3. **RAG Pipeline:**
+   - **Ingestion:** Batch ingestion into ChromaDB (`src/ingest.py`).
+   - **Retrieval:** Parallel BM25 + Vector Search, followed by Cross-Encoder Re-Ranking (`src/query.py`).
+   - **Generation:** LLM augmented with conversation history (Memory).
 
-## 🚀 Installation et Utilisation
+## 🚀 Installation & Usage
 
-### Prérequis
+### Prerequisites
 - Python 3.11+
-- Node.js & npm (pour l'interface graphique)
-- Un fournisseur LLM local (Ollama) ou cloud (Google Gemini API)
+- Node.js & npm (for the graphical interface)
+- A local LLM provider (Ollama) or a cloud provider (Google Gemini API)
 
-### 1. Configuration du Backend
+### 1. Backend Configuration
 ```bash
-# Créer et activer l'environnement virtuel
+# Create and activate the virtual environment
 python -m venv venv
-source venv/bin/activate  # Sur Windows: venv\Scripts\activate
+source venv/bin/activate  # On Windows: venv\Scripts\activate
 
-# Installer les dépendances
+# Install dependencies
 pip install -r requirements.txt
 
-# Configurer l'environnement
+# Configure the environment
 cp .env.example .env
 ```
-Éditez le fichier `.env` selon vos préférences (`LLM_PROVIDER="ollama"` ou `"gemini"`).
+Edit the `.env` file according to your preferences (`LLM_PROVIDER="ollama"` or `"gemini"`).
 
-### 2. Ingestion des données
-Placez vos PDF dans le dossier `notes/` (ex: `notes/signal_processing/`).
-Exécutez le script d'ingestion pour encoder vos documents dans la base :
+### 2. Data Ingestion
+Place your PDF files in the `notes/` directory (e.g., `notes/signal_processing/`).
+Run the ingestion script to encode your documents into the database:
 ```bash
 python src/ingest.py
 ```
-*(Utilisez l'option `--reset` pour vider la base avant l'ingestion).*
+*(Use the `--reset` flag to clear the database before ingestion if needed).*
 
-### 3. Lancer l'API Backend (FastAPI)
-L'API qui gère l'intelligence du système RAG doit être démarrée :
+### 3. Launch the Backend API (FastAPI)
+Start the API that powers the RAG intelligence:
 ```bash
 python -m uvicorn src.main:app --reload --host 127.0.0.1 --port 8000
 ```
 
-### 4. Lancer l'Interface Frontend (Vite)
-Ouvrez un nouveau terminal et lancez l'application web :
+### 4. Launch the Frontend Interface (Vite)
+Open a new terminal and start the web application:
 ```bash
 cd frontend
 npm install
 npm run dev
 ```
-Ouvrez ensuite le lien local fourni par Vite (généralement `http://localhost:5173`) dans votre navigateur pour profiter de l'expérience !
+Then, open the local link provided by Vite (usually `http://localhost:5173`) in your web browser to enjoy the experience!
 
-*(Note : L'ancienne interface Streamlit via `streamlit run src/app.py` reste disponible dans le code si vous préférez une UI basique)*
+*(Note: The old Streamlit interface via `streamlit run src/app.py` is still available in the codebase if you prefer a basic UI).*
