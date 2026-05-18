@@ -54,6 +54,10 @@ def ingest_documents(reset=False):
 
         try:
             reader = PdfReader(pdf_path)
+            all_chunks = []
+            all_ids = []
+            all_metadatas = []
+
             for page_num, page in enumerate(reader.pages):
                 text = page.extract_text()
                 if not text or len(text.strip()) < 50:
@@ -62,28 +66,30 @@ def ingest_documents(reset=False):
                 chunks = text_splitter.split_text(text)
                 if not chunks:
                     continue
-
-                embeddings = model.encode(chunks, normalize_embeddings=True).tolist()
-
-                ids = [f"{filename}_p{page_num+1}_c{i}" for i in range(len(chunks))]
-                metadatas = [
-                    {
+                
+                for i, chunk in enumerate(chunks):
+                    all_chunks.append(chunk)
+                    all_ids.append(f"{filename}_p{page_num+1}_c{i}")
+                    all_metadatas.append({
                         "filename": filename,
                         "subject": subject,
                         "page_number": page_num + 1,
                         "chunk_index": i,
                         "text": chunk
-                    }
-                    for i, chunk in enumerate(chunks)
-                ]
+                    })
 
+            if all_chunks:
+                # Batch encode all chunks for the entire PDF at once (massive speedup)
+                embeddings = model.encode(all_chunks, normalize_embeddings=True).tolist()
+                
+                # Batch add to ChromaDB
                 collection.add(
-                    ids=ids,
+                    ids=all_ids,
                     embeddings=embeddings,
-                    documents=chunks,
-                    metadatas=metadatas
+                    documents=all_chunks,
+                    metadatas=all_metadatas
                 )
-                total_chunks += len(chunks)
+                total_chunks += len(all_chunks)
         except Exception as e:
             print(f"Error processing {filename}: {e}")
 
