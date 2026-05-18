@@ -3,61 +3,67 @@
 Un assistant intelligent basé sur l'architecture RAG pour interroger vos notes de cours de la filière Smart ICT à l'INPT.
 *A smart RAG-based assistant to query your INPT Smart ICT course notes.*
 
-## 📸 Démo
-*(Placeholder for screenshot)*
-![Capture d'écran de l'application](docs/screenshots/app_demo.png)
+## ✨ Fonctionnalités et Améliorations Récentes
 
-🔗 **Lien de la démo en direct :** [Live URL Placeholder]
-
-## ✨ Fonctionnalités
-- 📄 **Ingestion de PDF :** Extraction de texte à partir de documents PDF locaux.
-- ✂️ **Découpage intelligent :** Utilisation de `RecursiveCharacterTextSplitter` pour découper le texte de manière sémantique.
-- 🧠 **Embeddings Multilingues :** Encodage avec le modèle `intfloat/multilingual-e5-small`.
+- 📄 **Ingestion Optimisée :** Extraction de texte avec `RecursiveCharacterTextSplitter`. Traitement par lots (Batch Encoding) des embeddings pour réduire massivement le temps d'ingestion.
+- 🚀 **Retrieval Parallèle Hybride :** Recherche simultanée dans ChromaDB (Vectoriel) et via BM25 (Lexical) avec un `ThreadPoolExecutor` pour minimiser la latence.
+- 🧠 **Mémoire Conversationnelle :** L'assistant mémorise le contexte des messages précédents pour vous permettre de poser des questions de suivi naturellement.
+- 💎 **Interface Utilisateur Premium :** Nouvelle interface web (Vite) avec un design dark glassmorphism très esthétique, typographie moderne et animations fluides.
 - 🗄️ **Base de Données Vectorielle :** Stockage local persistant avec ChromaDB.
-- 🤖 **Génération de Réponses :** Supporte à la fois un modèle local via **Ollama** (ex: `lfm2.5-thinking`) pour la confidentialité totale, et l'API **Google Gemini** (`gemini-1.5-flash`) pour des performances rapides.
-- 🏷️ **Citations :** Chaque réponse est accompagnée de la source (nom du fichier et page).
-- 💻 **Interface Utilisateur :** Interface web interactive développée avec Streamlit.
+- 🤖 **Génération de Réponses :** Supporte le local via **Ollama** (`llama3.2:3b` ou autre) ou le cloud via l'API **Google Gemini**.
+- 🏷️ **Citations :** Chaque réponse est accompagnée de sa source (nom du document et page).
 
 ## 🏗️ Architecture
-L'architecture de l'application repose sur un pipeline RAG classique :
-1. **Préparation des données :** Extraction, découpage et création d'embeddings à partir des PDF.
-2. **Stockage :** Sauvegarde des vecteurs dans ChromaDB.
-3. **Interrogation :** Création d'un embedding pour la question de l'utilisateur.
-4. **Récupération (Retrieval) :** Recherche des chunks de texte les plus pertinents.
-5. **Génération :** Envoi du contexte récupéré et de la question au modèle Gemini pour formuler la réponse.
 
-Pour plus de détails, consultez [Architecture](docs/architecture.md).
+1. **Backend (FastAPI) :** API REST asynchrone gérant le RAG, exposée sur le port `8000`.
+2. **Frontend (Vite) :** Interface utilisateur moderne (HTML/CSS/Vanilla JS) connectée au backend.
+3. **Pipeline RAG :**
+   - **Ingestion :** Ingestion batch dans ChromaDB (`src/ingest.py`).
+   - **Récupération (Retrieval) :** Recherche parallèle BM25 + Vectorielle, puis Cross-Encoder Re-Ranking (`src/query.py`).
+   - **Génération :** LLM augmenté de l'historique de conversation (Mémoire).
 
 ## 🚀 Installation et Utilisation
 
 ### Prérequis
-- Python 3.11
+- Python 3.11+
+- Node.js & npm (pour l'interface graphique)
 - Un fournisseur LLM local (Ollama) ou cloud (Google Gemini API)
 
-### Étapes d'installation
-1. Clonez ce dépôt.
-2. Créez un environnement virtuel et installez les dépendances :
-   ```bash
-   python -m venv venv
-   source venv/bin/activate  # Sur Windows: venv\Scripts\activate
-   pip install -r requirements.txt
-   ```
-3. Créez un fichier `.env` basé sur `.env.example` et configurez votre fournisseur (`LLM_PROVIDER="ollama"` ou `"gemini"`). Si vous utilisez Gemini, ajoutez votre `GOOGLE_API_KEY`.
-4. Placez vos PDF dans le dossier `notes/` (ex: `notes/signal_processing/`).
+### 1. Configuration du Backend
+```bash
+# Créer et activer l'environnement virtuel
+python -m venv venv
+source venv/bin/activate  # Sur Windows: venv\Scripts\activate
 
-### Ingestion des données
-Exécutez le script d'ingestion pour traiter les PDF et remplir la base de données :
+# Installer les dépendances
+pip install -r requirements.txt
+
+# Configurer l'environnement
+cp .env.example .env
+```
+Éditez le fichier `.env` selon vos préférences (`LLM_PROVIDER="ollama"` ou `"gemini"`).
+
+### 2. Ingestion des données
+Placez vos PDF dans le dossier `notes/` (ex: `notes/signal_processing/`).
+Exécutez le script d'ingestion pour encoder vos documents dans la base :
 ```bash
 python src/ingest.py
 ```
 *(Utilisez l'option `--reset` pour vider la base avant l'ingestion).*
 
-### Lancement de l'interface Streamlit
+### 3. Lancer l'API Backend (FastAPI)
+L'API qui gère l'intelligence du système RAG doit être démarrée :
 ```bash
-streamlit run src/app.py
+python -m uvicorn src.main:app --reload --host 127.0.0.1 --port 8000
 ```
 
-### Tester la récupération (Retrieval)
+### 4. Lancer l'Interface Frontend (Vite)
+Ouvrez un nouveau terminal et lancez l'application web :
 ```bash
-python scripts/test_retrieval.py
+cd frontend
+npm install
+npm run dev
 ```
+Ouvrez ensuite le lien local fourni par Vite (généralement `http://localhost:5173`) dans votre navigateur pour profiter de l'expérience !
+
+*(Note : L'ancienne interface Streamlit via `streamlit run src/app.py` reste disponible dans le code si vous préférez une UI basique)*
