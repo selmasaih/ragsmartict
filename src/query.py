@@ -98,15 +98,14 @@ def _make_candidate_id(meta, fallback: str) -> str:
 
 def _build_system_prompt():
     return (
-        "Tu es un assistant pour un etudiant ingenieur a INPT Rabat (filiere Smart ICT). "
-        "Adopte un ton professionnel, clair et concis. "
-        "Structure la reponse en paragraphes courts; utilise des puces si cela clarifie. "
-        "Reponds directement, sans raisonnement interne ni balises <think>. "
-        "Garde la reponse courte (max 120 mots). "
-        "Reponds UNIQUEMENT en francais et UNIQUEMENT avec les informations des extraits fournis. "
-        "Si l'information n'est pas dans les extraits, dis clairement: 'Je ne trouve pas cette information dans tes notes.' "
-        "Ne cite pas les sources dans la reponse; elles seront affichees separement. "
-        "N'utilise pas de references inline comme [fichier, page]."
+        "Tu es un assistant expert pour un etudiant ingenieur a INPT Rabat (filiere Smart ICT). "
+        "Adopte un ton professionnel, précis et scientifique. "
+        "Structure la reponse en paragraphes courts ou listes à puces. "
+        "REVISE TES SOURCES : Avant de repondre, verifie si les informations sont coherentes. "
+        "Si deux extraits semblent se contredire (ex: differentes annees ou matieres), precise-le. "
+        "NE HALUCINE PAS : Si l'information exacte n'est pas dans les extraits, dis 'Information non trouvee'. "
+        "Reponds UNIQUEMENT en francais et UNIQUEMENT avec les extraits fournis. "
+        "Ne cite pas les sources dans le texte (ex: [1]); elles sont listees en dessous."
     )
 
 
@@ -344,9 +343,10 @@ def warmup_models():
     print(f"[RAG] All models ready in {time.time() - t0:.1f}s")
 
 
-def answer_question(question: str) -> dict:
+def answer_question(question: str, history: list = None) -> dict:
     start_time = time.time()
     timings = {}
+    history = history or []
 
     try:
         collection = _get_collection()
@@ -377,23 +377,30 @@ def answer_question(question: str) -> dict:
     question_embedding = model.encode(query_text, normalize_embeddings=True).tolist()
     timings["embedding_ms"] = int((time.time() - t) * 1000)
 
-    # 3. Vector retrieval
+    # 3 & 4. Parallel Vector and BM25 retrieval
     t = time.time()
-    results = collection.query(
-        query_embeddings=[question_embedding],
-        n_results=max(TOP_K, VECTOR_K),
-        include=["documents", "metadatas", "distances"]
-    )
-    vector_candidates = _collect_vector_candidates(results)
-    timings["vector_retrieval_ms"] = int((time.time() - t) * 1000)
-
-    # 4. BM25 retrieval (skip if BM25_K == 0)
-    t = time.time()
-    if BM25_K > 0:
-        bm25_candidates = _collect_bm25_candidates(collection, query_text)
-    else:
-        bm25_candidates = []
-    timings["bm25_retrieval_ms"] = int((time.time() - t) * 1000)
+    import concurrent.futures
+    with concurrent.futures.ThreadPoolExecutor(max_workers=2) as executor:
+        def fetch_vector():
+            res = collection.query(
+                query_embeddings=[question_embedding],
+                n_results=max(TOP_K, VECTOR_K),
+                include=["documents", "metadatas", "distances"]
+            )
+            return _collect_vector_candidates(res)
+            
+        def fetch_bm25():
+            if BM25_K > 0:
+                return _collect_bm25_candidates(collection, query_text)
+            return []
+            
+        future_vector = executor.submit(fetch_vector)
+        future_bm25 = executor.submit(fetch_bm25)
+        
+        vector_candidates = future_vector.result()
+        bm25_candidates = future_bm25.result()
+        
+    timings["parallel_retrieval_ms"] = int((time.time() - t) * 1000)
 
     # 5. Merge candidates
     t = time.time()
@@ -432,8 +439,11 @@ def answer_question(question: str) -> dict:
         if CONTEXT_MAX_CHUNK_CHARS and len(snippet) > CONTEXT_MAX_CHUNK_CHARS:
             snippet = snippet[:CONTEXT_MAX_CHUNK_CHARS].rstrip() + "…"
 
-        block = f"Extrait:\n{snippet}"
-        next_total = total_chars + len(block) + 1
+        fname = meta.get("filename", "Inconnu")
+        pnum = meta.get("page_number", "?")
+        block = f"--- SOURCE: {fname} (Page {pnum}) ---\n{snippet}"
+        
+        next_total = total_chars + len(block) + 2
         if CONTEXT_MAX_CHARS and next_total > CONTEXT_MAX_CHARS:
             break
 
@@ -442,12 +452,20 @@ def answer_question(question: str) -> dict:
         used_metas.append(meta)
         total_chars = next_total
     
-    context_str = "\n".join(context_blocks)
+    context_str = "\n\n".join(context_blocks)
 
     sources = _build_sources(used_chunks, used_metas)
 
-    # 7. Build user message
-    user_message = f"Contexte:\n{context_str}\n\nQuestion: {question}"
+    # 7. Build user message with history
+    history_str = ""
+    if history:
+        history_str = "Historique de la conversation:\n"
+        for msg in history[-4:]: # Only keep last 4 messages to save tokens
+            role = "Utilisateur" if msg.get("role") == "user" else "Assistant"
+            history_str += f"{role}: {msg.get('content')}\n"
+        history_str += "\n"
+        
+    user_message = f"{history_str}Contexte:\n{context_str}\n\nQuestion: {question}"
 
     # 8. Call LLM (Gemini or Ollama)
     t = time.time()
