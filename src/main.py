@@ -26,8 +26,11 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+from typing import Optional, List, Dict, Any
+
 class QueryRequest(BaseModel):
     question: str
+    history: Optional[List[Dict[str, Any]]] = []
 
 @app.get("/api/stats")
 def get_stats():
@@ -41,7 +44,7 @@ def get_stats():
 
 @app.post("/api/query")
 def query_rag(request: QueryRequest):
-    result = answer_question(request.question)
+    result = answer_question(request.question, history=request.history)
     
     if "error" in result:
         raise HTTPException(status_code=500, detail=result["error"])
