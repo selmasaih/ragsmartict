@@ -292,6 +292,21 @@ def _get_bm25_index(collection):
     return _BM25_INDEX
 
 
+def add_file_to_index(path: str, subject: str = "Uploads"):
+    """Ingest a single uploaded file into the live collection and invalidate
+    the BM25 cache so it is immediately searchable. Returns (chunks_added, topic)."""
+    global _BM25_INDEX, _BM25_DOCS, _BM25_METAS
+    from src.ingest import process_file, make_splitter
+    collection = _get_collection()
+    model = _get_embedding_model()
+    n, topic = process_file(collection, model, make_splitter(), path, subject)
+    _BM25_INDEX = None
+    _BM25_DOCS = None
+    _BM25_METAS = None
+    log.info("Uploaded '%s' -> topic=%s (%d chunks)", path, topic, n)
+    return n, topic
+
+
 def list_topics() -> list[str]:
     """Return the distinct canonical topics present in the collection."""
     try:
@@ -456,7 +471,8 @@ def _retrieve(collection, question: str, topic: str = None):
 
     t = time.time()
     model = _get_embedding_model()
-    question_embedding = model.encode(query_text, normalize_embeddings=True).tolist()
+    # multilingual-e5 expects a "query: " prefix on search queries.
+    question_embedding = model.encode("query: " + query_text, normalize_embeddings=True).tolist()
     timings["embedding_ms"] = int((time.time() - t) * 1000)
 
     t = time.time()

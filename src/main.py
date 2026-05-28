@@ -1,19 +1,25 @@
+import os
 import json
 from contextlib import asynccontextmanager
 from typing import Optional, List, Dict, Any
 
 import chromadb
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, UploadFile, File
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 
-from src.query import answer_question, stream_answer, warmup_models, list_topics
+from src.query import answer_question, stream_answer, warmup_models, list_topics, add_file_to_index
+from src.extract import IMAGE_EXTS, ocr_available
 from src.config import (
     CHROMA_DB_PATH, COLLECTION_NAME, CORS_ORIGINS, MAX_QUESTION_CHARS,
-    LLM_PROVIDER, validate,
+    LLM_PROVIDER, NOTES_PATH, validate,
 )
 from src.logger import get_logger
+
+UPLOAD_DIR = os.path.join(NOTES_PATH, "_uploads")
+ALLOWED_UPLOAD_EXTS = {".pdf"} | IMAGE_EXTS
+MAX_UPLOAD_BYTES = 25 * 1024 * 1024
 
 log = get_logger("rag.api")
 
@@ -80,6 +86,47 @@ def get_stats():
 @app.get("/api/topics")
 def get_topics():
     return {"topics": list_topics()}
+
+
+@app.post("/api/upload")
+async def upload_file(file: UploadFile = File(...)):
+    ext = os.path.splitext(file.filename or "")[1].lower()
+    if ext not in ALLOWED_UPLOAD_EXTS:
+        raise HTTPException(
+            status_code=422,
+            detail=f"Type de fichier non supporté ({ext}). Formats acceptés : PDF, images.",
+        )
+
+    os.makedirs(UPLOAD_DIR, exist_ok=True)
+    safe_name = os.path.basename(file.filename)
+    dest = os.path.join(UPLOAD_DIR, safe_name)
+
+    size = 0
+    with open(dest, "wb") as out:
+        while chunk := await file.read(1024 * 1024):
+            size += len(chunk)
+            if size > MAX_UPLOAD_BYTES:
+                out.close()
+                os.remove(dest)
+                raise HTTPException(status_code=413, detail="Fichier trop volumineux (max 25 Mo).")
+            out.write(chunk)
+
+    try:
+        n, topic = add_file_to_index(dest, subject="Uploads")
+    except Exception as e:
+        log.error("Upload ingestion failed for %s: %s", safe_name, e)
+        raise HTTPException(status_code=500, detail=f"Échec de l'indexation : {e}")
+
+    if n == 0:
+        hint = ""
+        if ext in IMAGE_EXTS and not ocr_available():
+            hint = " (OCR indisponible : installez Tesseract pour les images)."
+        raise HTTPException(
+            status_code=422,
+            detail=f"Aucun texte exploitable extrait de ce fichier{hint}",
+        )
+
+    return {"filename": safe_name, "chunks_added": n, "topic": topic}
 
 
 @app.post("/api/query")
