@@ -1,5 +1,6 @@
 import re
 import time
+import json
 import requests
 import chromadb
 from rank_bm25 import BM25Okapi
@@ -12,11 +13,14 @@ from src.config import (
     CONTEXT_MAX_CHARS, CONTEXT_MAX_CHUNK_CHARS,
     VECTOR_K, BM25_K, RERANK_TOP_K, RERANKER_MODEL, ENABLE_RERANK,
     ENABLE_QUERY_REWRITE, REWRITE_MAX_WORDS,
-    BM25_PAGE_SIZE, BM25_MAX_DOCS,
-    LLM_PROVIDER, GOOGLE_API_KEY
+    BM25_PAGE_SIZE, BM25_MAX_DOCS, MAX_HISTORY_MESSAGES,
+    LLM_PROVIDER, GOOGLE_API_KEY, GEMINI_MODEL,
 )
+from src.logger import get_logger
 
 import google.generativeai as genai
+
+log = get_logger("rag.query")
 
 if GOOGLE_API_KEY:
     genai.configure(api_key=GOOGLE_API_KEY)
@@ -42,13 +46,13 @@ def _get_collection():
     global _CHROMA_CLIENT, _CHROMA_COLLECTION
     if _CHROMA_COLLECTION is None:
         import os
-        print(f"[RAG] Connecting to ChromaDB at: {CHROMA_DB_PATH} (exists={os.path.exists(CHROMA_DB_PATH)})")
+        log.info("Connecting to ChromaDB at %s (exists=%s)", CHROMA_DB_PATH, os.path.exists(CHROMA_DB_PATH))
         _CHROMA_CLIENT = chromadb.PersistentClient(path=CHROMA_DB_PATH)
         _CHROMA_COLLECTION = _CHROMA_CLIENT.get_or_create_collection(name=COLLECTION_NAME)
         count = _CHROMA_COLLECTION.count()
-        print(f"[RAG] Collection '{COLLECTION_NAME}' loaded — {count} chunks")
+        log.info("Collection '%s' loaded — %d chunks", COLLECTION_NAME, count)
         if count == 0:
-            print("[RAG] WARNING: Collection is empty. Run ingestion first.")
+            log.warning("Collection is empty. Run ingestion first.")
     return _CHROMA_COLLECTION
 
 
@@ -69,21 +73,6 @@ def _extractive_answer(chunks, max_sentences: int = 2, max_chars: int = 500) -> 
     if not extract:
         extract = text[:max_chars].strip()
     return extract
-
-
-def _looks_like_reasoning(text: str) -> bool:
-    if not text:
-        return True
-    lower = text.lower()
-    cues = [
-        "the user",
-        "instructions",
-        "format",
-        "i need to",
-        "let's",
-        "wait,",
-    ]
-    return any(cue in lower for cue in cues)
 
 
 def _make_candidate_id(meta, fallback: str) -> str:
@@ -109,12 +98,66 @@ def _build_system_prompt():
     )
 
 
-def _call_ollama(prompt: str, system_prompt: str = "") -> str:
-    payload = {
+# ── Think-tag stripping (streaming-safe) ─────────────────────────────
+def _make_think_filter():
+    """Return (feed, flush) closures that suppress <think>...</think> blocks
+    from a token stream, handling tags split across chunks."""
+    OPEN, CLOSE = "<think>", "</think>"
+    state = {"buf": "", "in_think": False}
+
+    def feed(text: str = "") -> str:
+        state["buf"] += text
+        out = []
+        while True:
+            if state["in_think"]:
+                i = state["buf"].find(CLOSE)
+                if i == -1:
+                    keep = len(CLOSE) - 1
+                    if len(state["buf"]) > keep:
+                        state["buf"] = state["buf"][-keep:]
+                    break
+                state["buf"] = state["buf"][i + len(CLOSE):]
+                state["in_think"] = False
+            else:
+                i = state["buf"].find(OPEN)
+                if i == -1:
+                    keep = len(OPEN) - 1
+                    if len(state["buf"]) > keep:
+                        out.append(state["buf"][:-keep])
+                        state["buf"] = state["buf"][-keep:]
+                    break
+                out.append(state["buf"][:i])
+                state["buf"] = state["buf"][i + len(OPEN):]
+                state["in_think"] = True
+        return "".join(out)
+
+    def flush() -> str:
+        if state["in_think"]:
+            state["buf"] = ""
+            return ""
+        out = state["buf"]
+        state["buf"] = ""
+        return out
+
+    return feed, flush
+
+
+def _strip_think_blocking(raw: str) -> str:
+    cleaned = re.sub(r"<think>.*?</think>", "", raw, flags=re.DOTALL)
+    # Drop any leftover unclosed think block (model truncated mid-reasoning).
+    cleaned = re.sub(r"<think>.*", "", cleaned, flags=re.DOTALL).strip()
+    if cleaned:
+        return cleaned
+    # Nothing left after stripping: only fall back to raw if there was no think tag.
+    return "" if "<think>" in raw else raw
+
+
+def _ollama_payload(prompt: str, system_prompt: str, stream: bool) -> dict:
+    return {
         "model": OLLAMA_MODEL,
         "prompt": prompt,
         "system": system_prompt,
-        "stream": False,
+        "stream": stream,
         "keep_alive": OLLAMA_KEEP_ALIVE,
         "options": {
             "num_predict": OLLAMA_NUM_PREDICT,
@@ -124,28 +167,62 @@ def _call_ollama(prompt: str, system_prompt: str = "") -> str:
         },
     }
 
-    response = requests.post(OLLAMA_API_URL, json=payload, timeout=OLLAMA_TIMEOUT_S)
+
+def _call_ollama(prompt: str, system_prompt: str = "") -> str:
+    response = requests.post(
+        OLLAMA_API_URL, json=_ollama_payload(prompt, system_prompt, False), timeout=OLLAMA_TIMEOUT_S
+    )
     response.raise_for_status()
     raw = response.json().get("response", "")
+    return _strip_think_blocking(raw)
 
-    # Strip <think>...</think> reasoning block from thinking models
-    cleaned = re.sub(r"<think>.*?</think>", "", raw, flags=re.DOTALL).strip()
-    if "<think>" in raw and not cleaned:
-        # If <think> never closed, drop everything from it onward
-        cleaned = re.sub(r"<think>.*", "", raw, flags=re.DOTALL).strip()
-        return cleaned
-    return cleaned if cleaned else raw
+
+def _stream_ollama(prompt: str, system_prompt: str = ""):
+    feed, flush = _make_think_filter()
+    with requests.post(
+        OLLAMA_API_URL, json=_ollama_payload(prompt, system_prompt, True),
+        timeout=OLLAMA_TIMEOUT_S, stream=True,
+    ) as response:
+        response.raise_for_status()
+        for line in response.iter_lines():
+            if not line:
+                continue
+            try:
+                data = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            piece = data.get("response", "")
+            if piece:
+                visible = feed(piece)
+                if visible:
+                    yield visible
+            if data.get("done"):
+                break
+    tail = flush()
+    if tail:
+        yield tail
 
 
 def _call_gemini(prompt: str, system_prompt: str = "") -> str:
-    try:
-        model = genai.GenerativeModel("gemini-2.0-flash")
-        full_prompt = f"Instructions système:\n{system_prompt}\n\nQuestion et contexte:\n{prompt}" if system_prompt else prompt
-        response = model.generate_content(full_prompt)
-        return response.text.strip()
-    except Exception as e:
-        print(f"[RAG] Gemini error: {e}")
-        raise e
+    model = genai.GenerativeModel(GEMINI_MODEL)
+    full_prompt = (
+        f"Instructions système:\n{system_prompt}\n\nQuestion et contexte:\n{prompt}"
+        if system_prompt else prompt
+    )
+    response = model.generate_content(full_prompt)
+    return response.text.strip()
+
+
+def _stream_gemini(prompt: str, system_prompt: str = ""):
+    model = genai.GenerativeModel(GEMINI_MODEL)
+    full_prompt = (
+        f"Instructions système:\n{system_prompt}\n\nQuestion et contexte:\n{prompt}"
+        if system_prompt else prompt
+    )
+    for chunk in model.generate_content(full_prompt, stream=True):
+        text = getattr(chunk, "text", "")
+        if text:
+            yield text
 
 
 def _get_reranker():
@@ -170,7 +247,7 @@ def _rewrite_query(question: str) -> str:
             "Tu es un assistant de recherche. Reformule la question en une requete courte et claire, "
             "sans ajouter d'informations. Reponds par une seule ligne, sans guillemets."
         )
-        if LLM_PROVIDER.lower() == "gemini":
+        if LLM_PROVIDER == "gemini":
             rewritten = _call_gemini(question, system_prompt=system_instruction).strip().splitlines()[0].strip()
         else:
             rewritten = _call_ollama(question, system_prompt=system_instruction).strip().splitlines()[0].strip()
@@ -215,6 +292,18 @@ def _get_bm25_index(collection):
     return _BM25_INDEX
 
 
+def list_topics() -> list[str]:
+    """Return the distinct canonical topics present in the collection."""
+    try:
+        collection = _get_collection()
+        _get_bm25_index(collection)  # populates _BM25_METAS cheaply
+        metas = _BM25_METAS or []
+        topics = {m.get("topic") for m in metas if m and m.get("topic")}
+        return sorted(topics)
+    except Exception:
+        return []
+
+
 def _build_sources(retrieved_chunks, metadatas):
     sources = []
     seen = set()
@@ -229,6 +318,7 @@ def _build_sources(retrieved_chunks, metadatas):
         sources.append({
             "filename": filename,
             "page_number": page_number,
+            "subject": meta.get("subject"),
             "text": chunk,
         })
     return sources
@@ -245,16 +335,11 @@ def _collect_vector_candidates(results):
             continue
         score = 1 / (1 + dist) if dist is not None else 0
         doc_id = _make_candidate_id(meta, f"vec_{idx}")
-        candidates.append({
-            "id": doc_id,
-            "doc": doc,
-            "meta": meta,
-            "score": score,
-        })
+        candidates.append({"id": doc_id, "doc": doc, "meta": meta, "score": score})
     return candidates
 
 
-def _collect_bm25_candidates(collection, query_text: str):
+def _collect_bm25_candidates(collection, query_text: str, topic: str = None):
     try:
         index = _get_bm25_index(collection)
     except Exception:
@@ -262,17 +347,16 @@ def _collect_bm25_candidates(collection, query_text: str):
     if index is None or not _BM25_DOCS:
         return []
     scores = index.get_scores(_tokenize(query_text))
-    ranked = sorted(range(len(scores)), key=lambda i: scores[i], reverse=True)[:BM25_K]
+    order = sorted(range(len(scores)), key=lambda i: scores[i], reverse=True)
     candidates = []
-    for idx in ranked:
+    for idx in order:
         meta = _BM25_METAS[idx]
+        if topic and (meta or {}).get("topic") != topic:
+            continue
         doc_id = _make_candidate_id(meta, f"bm25_{idx}")
-        candidates.append({
-            "id": doc_id,
-            "doc": _BM25_DOCS[idx],
-            "meta": meta,
-            "score": scores[idx],
-        })
+        candidates.append({"id": doc_id, "doc": _BM25_DOCS[idx], "meta": meta, "score": scores[idx]})
+        if len(candidates) >= BM25_K:
+            break
     return candidates
 
 
@@ -303,114 +387,109 @@ def _rerank_candidates(query_text: str, candidates):
 def warmup_models():
     """Pre-load embedding model, reranker, ChromaDB collection, and BM25
     index so the first user query isn't penalised by cold-start latency."""
-    print("[RAG] Pre-warming models ...")
+    log.info("Pre-warming models ...")
     t0 = time.time()
 
     t = time.time()
     _get_embedding_model()
-    print(f"[RAG]   OK Embedding model loaded       ({time.time() - t:.1f}s)")
+    log.info("  OK Embedding model loaded (%.1fs)", time.time() - t)
 
     if ENABLE_RERANK:
         t = time.time()
         _get_reranker()
-        print(f"[RAG]   OK Reranker loaded               ({time.time() - t:.1f}s)")
+        log.info("  OK Reranker loaded (%.1fs)", time.time() - t)
     else:
-        print("[RAG]   SKIP Reranker (disabled)")
+        log.info("  SKIP Reranker (disabled)")
 
     t = time.time()
     col = _get_collection()
-    print(f"[RAG]   OK ChromaDB collection loaded    ({time.time() - t:.1f}s)")
+    log.info("  OK ChromaDB collection loaded (%.1fs)", time.time() - t)
 
     if BM25_K > 0:
         t = time.time()
         _get_bm25_index(col)
-        print(f"[RAG]   OK BM25 index built              ({time.time() - t:.1f}s)")
+        log.info("  OK BM25 index built (%.1fs)", time.time() - t)
     else:
-        print("[RAG]   SKIP BM25 index (disabled)")
+        log.info("  SKIP BM25 index (disabled)")
 
-    # Warm LLM by sending a tiny prompt so the model is loaded in memory
     t = time.time()
     try:
-        if LLM_PROVIDER.lower() == "gemini":
+        if LLM_PROVIDER == "gemini":
             _call_gemini("ping", system_prompt="Reply with 'pong' only.")
-            print(f"[RAG]   OK Gemini model warmed          ({time.time() - t:.1f}s)")
+            log.info("  OK Gemini model warmed (%.1fs)", time.time() - t)
         else:
             _call_ollama("ping", system_prompt="Reply with 'pong' only.")
-            print(f"[RAG]   OK Ollama model warmed          ({time.time() - t:.1f}s)")
+            log.info("  OK Ollama model warmed (%.1fs)", time.time() - t)
     except Exception as e:
-        print(f"[RAG]   WARN LLM warm-up failed: {e}")
+        log.warning("  LLM warm-up failed: %s", e)
 
-    print(f"[RAG] All models ready in {time.time() - t0:.1f}s")
+    log.info("All models ready in %.1fs", time.time() - t0)
 
 
-def answer_question(question: str, history: list = None) -> dict:
-    start_time = time.time()
-    timings = {}
-    history = history or []
-
+def _ensure_collection_ready():
+    """Return (collection, error_dict). error_dict is None when ready."""
     try:
         collection = _get_collection()
-        if collection.count() == 0:
-            return {
-                "error": "La base de données vectorielle est vide. Veuillez lancer l'ingestion d'abord avec: python -m src.ingest",
-                "sources": [], "latency_ms": 0
-            }
     except Exception as e:
         import traceback
         err_msg = (
             f"Erreur d'accès à la base de données vectorielle.\n"
-            f"Chemin: {CHROMA_DB_PATH}\n"
-            f"Exception: {str(e)}\n"
-            f"{traceback.format_exc()}"
+            f"Chemin: {CHROMA_DB_PATH}\nException: {e}\n{traceback.format_exc()}"
         )
-        print(f"[RAG] ERROR: {err_msg}")
-        return {"error": err_msg, "sources": [], "latency_ms": 0}
+        log.error(err_msg)
+        return None, {"error": err_msg, "sources": [], "latency_ms": 0}
+    if collection.count() == 0:
+        return None, {
+            "error": "La base de données vectorielle est vide. Veuillez lancer l'ingestion d'abord avec: python -m src.ingest",
+            "sources": [], "latency_ms": 0,
+        }
+    return collection, None
 
-    # 1. Optionally rewrite the query for retrieval
+
+def _retrieve(collection, question: str, topic: str = None):
+    """Run the full retrieval pipeline. Returns (context_str, sources, retrieved_chunks, timings)."""
+    timings = {}
+
     t = time.time()
     query_text = _rewrite_query(question)
     timings["query_rewrite_ms"] = int((time.time() - t) * 1000)
 
-    # 2. Embed the query
     t = time.time()
     model = _get_embedding_model()
     question_embedding = model.encode(query_text, normalize_embeddings=True).tolist()
     timings["embedding_ms"] = int((time.time() - t) * 1000)
 
-    # 3 & 4. Parallel Vector and BM25 retrieval
     t = time.time()
     import concurrent.futures
+    where = {"topic": topic} if topic else None
     with concurrent.futures.ThreadPoolExecutor(max_workers=2) as executor:
         def fetch_vector():
             res = collection.query(
                 query_embeddings=[question_embedding],
                 n_results=max(TOP_K, VECTOR_K),
-                include=["documents", "metadatas", "distances"]
+                where=where,
+                include=["documents", "metadatas", "distances"],
             )
             return _collect_vector_candidates(res)
-            
+
         def fetch_bm25():
             if BM25_K > 0:
-                return _collect_bm25_candidates(collection, query_text)
+                return _collect_bm25_candidates(collection, query_text, topic=topic)
             return []
-            
+
         future_vector = executor.submit(fetch_vector)
         future_bm25 = executor.submit(fetch_bm25)
-        
         vector_candidates = future_vector.result()
         bm25_candidates = future_bm25.result()
-        
     timings["parallel_retrieval_ms"] = int((time.time() - t) * 1000)
 
-    # 5. Merge candidates
     t = time.time()
     candidates = _merge_candidates(vector_candidates, bm25_candidates)
     timings["merge_ms"] = int((time.time() - t) * 1000)
 
     if not candidates:
-        return {"answer": "Aucun document pertinent trouvé dans la base de données.", "sources": [], "latency_ms": int((time.time() - start_time) * 1000)}
+        return "", [], [], timings
 
-    # 6. Rerank (skip if ENABLE_RERANK is False)
     t = time.time()
     if ENABLE_RERANK:
         try:
@@ -431,60 +510,72 @@ def answer_question(question: str, history: list = None) -> dict:
     used_chunks = []
     used_metas = []
     total_chars = 0
-
     for chunk, meta in zip(retrieved_chunks, metadatas):
         if not chunk:
             continue
         snippet = chunk.strip()
         if CONTEXT_MAX_CHUNK_CHARS and len(snippet) > CONTEXT_MAX_CHUNK_CHARS:
             snippet = snippet[:CONTEXT_MAX_CHUNK_CHARS].rstrip() + "…"
-
-        fname = meta.get("filename", "Inconnu")
-        pnum = meta.get("page_number", "?")
+        fname = (meta or {}).get("filename", "Inconnu")
+        pnum = (meta or {}).get("page_number", "?")
         block = f"--- SOURCE: {fname} (Page {pnum}) ---\n{snippet}"
-        
         next_total = total_chars + len(block) + 2
         if CONTEXT_MAX_CHARS and next_total > CONTEXT_MAX_CHARS:
             break
-
         context_blocks.append(block)
         used_chunks.append(chunk)
         used_metas.append(meta)
         total_chars = next_total
-    
+
     context_str = "\n\n".join(context_blocks)
-
     sources = _build_sources(used_chunks, used_metas)
+    return context_str, sources, used_chunks, timings
 
-    # 7. Build user message with history
+
+def _build_user_message(context_str: str, history: list, question: str) -> str:
     history_str = ""
     if history:
         history_str = "Historique de la conversation:\n"
-        for msg in history[-4:]: # Only keep last 4 messages to save tokens
+        for msg in history[-MAX_HISTORY_MESSAGES:]:
             role = "Utilisateur" if msg.get("role") == "user" else "Assistant"
             history_str += f"{role}: {msg.get('content')}\n"
         history_str += "\n"
-        
-    user_message = f"{history_str}Contexte:\n{context_str}\n\nQuestion: {question}"
+    return f"{history_str}Contexte:\n{context_str}\n\nQuestion: {question}"
 
-    # 8. Call LLM (Gemini or Ollama)
+
+def answer_question(question: str, history: list = None, topic: str = None) -> dict:
+    """Non-streaming RAG answer."""
+    start_time = time.time()
+    history = history or []
+
+    collection, err = _ensure_collection_ready()
+    if err:
+        return err
+
+    context_str, sources, retrieved_chunks, timings = _retrieve(collection, question, topic)
+    if not retrieved_chunks:
+        return {
+            "answer": "Aucun document pertinent trouvé dans la base de données.",
+            "sources": [], "latency_ms": int((time.time() - start_time) * 1000),
+        }
+
+    user_message = _build_user_message(context_str, history, question)
+
     t = time.time()
     try:
-        if LLM_PROVIDER.lower() == "gemini":
+        if LLM_PROVIDER == "gemini":
             answer = _call_gemini(user_message, system_prompt=_build_system_prompt())
         else:
             answer = _call_ollama(user_message, system_prompt=_build_system_prompt())
     except Exception as e:
         error_text = str(e)
         if "Connection" in error_text or "ConnectionRefusedError" in error_text:
-            fallback = (
-                "Le service LLM est inaccessible. Assurez-vous qu'il est configuré "
-                "et lancé correctement."
-            )
+            fallback = "Le service LLM est inaccessible. Assurez-vous qu'il est configuré et lancé correctement."
         else:
             fallback = _extractive_answer(retrieved_chunks) or (
                 "Je ne peux pas generer la reponse pour le moment. Reessayez plus tard."
             )
+        log.warning("LLM generation failed: %s", error_text)
         return {
             "answer": fallback,
             "sources": sources,
@@ -494,14 +585,57 @@ def answer_question(question: str, history: list = None) -> dict:
     timings["llm_generation_ms"] = int((time.time() - t) * 1000)
 
     latency_ms = int((time.time() - start_time) * 1000)
+    log.info("Timings: %s | Total: %dms", timings, latency_ms)
+    return {"answer": answer, "sources": sources, "latency_ms": latency_ms, "timings": timings}
 
-    # Log per-step timings
-    print(f"[RAG] Timings: {timings}  |  Total: {latency_ms}ms")
 
-    # 9. Return response
-    return {
-        "answer": answer,
-        "sources": sources,
-        "latency_ms": latency_ms,
-        "timings": timings,
-    }
+def stream_answer(question: str, history: list = None, topic: str = None):
+    """Generator yielding event dicts for SSE:
+       {"type": "token", "text": ...}
+       {"type": "sources", "sources": [...]}
+       {"type": "done", "latency_ms": ...}
+       {"type": "error", "error": ...}
+    """
+    start_time = time.time()
+    history = history or []
+
+    collection, err = _ensure_collection_ready()
+    if err:
+        yield {"type": "error", "error": err["error"]}
+        return
+
+    context_str, sources, retrieved_chunks, timings = _retrieve(collection, question, topic)
+    if not retrieved_chunks:
+        yield {"type": "sources", "sources": []}
+        yield {"type": "token", "text": "Aucun document pertinent trouvé dans la base de données."}
+        yield {"type": "done", "latency_ms": int((time.time() - start_time) * 1000)}
+        return
+
+    # Send sources up front so the UI can render citations immediately.
+    yield {"type": "sources", "sources": sources}
+
+    user_message = _build_user_message(context_str, history, question)
+    system_prompt = _build_system_prompt()
+
+    produced_any = False
+    try:
+        generator = _stream_gemini if LLM_PROVIDER == "gemini" else _stream_ollama
+        for piece in generator(user_message, system_prompt=system_prompt):
+            produced_any = True
+            yield {"type": "token", "text": piece}
+    except Exception as e:
+        error_text = str(e)
+        log.warning("Streaming generation failed: %s", error_text)
+        if not produced_any:
+            if "Connection" in error_text or "ConnectionRefusedError" in error_text:
+                fallback = "Le service LLM est inaccessible. Assurez-vous qu'il est configuré et lancé correctement."
+            else:
+                fallback = _extractive_answer(retrieved_chunks) or (
+                    "Je ne peux pas generer la reponse pour le moment. Reessayez plus tard."
+                )
+            yield {"type": "token", "text": fallback}
+        yield {"type": "error", "error": error_text}
+
+    latency_ms = int((time.time() - start_time) * 1000)
+    log.info("Stream timings: %s | Total: %dms", timings, latency_ms)
+    yield {"type": "done", "latency_ms": latency_ms}
