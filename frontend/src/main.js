@@ -11,6 +11,8 @@ const chatForm = document.getElementById('chat-form');
 const questionInput = document.getElementById('question-input');
 const docCountEl = document.getElementById('doc-count');
 const topicSelect = document.getElementById('topic-select');
+const fileInput = document.getElementById('file-input');
+const uploadButton = document.getElementById('upload-button');
 
 function refreshIcons() {
   createIcons({ icons, nameAttr: 'data-lucide', attrs: { class: 'lucide' } });
@@ -176,6 +178,36 @@ async function streamAnswer(question, handles) {
   if (buffer.trim()) flushEvent(buffer.trim());
 
   return answer;
+}
+
+if (uploadButton && fileInput) {
+  uploadButton.addEventListener('click', () => fileInput.click());
+  fileInput.addEventListener('change', async () => {
+    const file = fileInput.files && fileInput.files[0];
+    if (!file) return;
+    appendMessage('user', `<p>📎 ${escapeHtml(file.name)}</p>`);
+    const handles = createStreamingMessage();
+    handles.body.innerHTML = `<p>Import et indexation en cours…</p>`;
+    setSendingState(true);
+    try {
+      const form = new FormData();
+      form.append('file', file);
+      const res = await fetch(`${API_BASE}/upload`, { method: 'POST', body: form });
+      const data = await res.json();
+      if (res.ok) {
+        handles.body.innerHTML = `<p>✅ <strong>${escapeHtml(data.filename)}</strong> indexé — ${data.chunks_added} extraits ajoutés (domaine : ${escapeHtml(data.topic)}). Vous pouvez maintenant poser des questions dessus.</p>`;
+        fetchStats();
+      } else {
+        handles.body.innerHTML = `<p style="color:#ef4444;">Erreur: ${escapeHtml(data.detail || 'import impossible')}</p>`;
+      }
+    } catch (err) {
+      handles.body.innerHTML = `<p style="color:#ef4444;">Impossible de joindre le serveur pour l'import.</p>`;
+      console.error(err);
+    } finally {
+      setSendingState(false);
+      fileInput.value = '';
+    }
+  });
 }
 
 chatForm.addEventListener('submit', async (e) => {

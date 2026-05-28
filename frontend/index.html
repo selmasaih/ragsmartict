@@ -43,6 +43,10 @@
             <select id="topic-select" title="Filtrer par domaine">
               <option value="">Tous les domaines</option>
             </select>
+            <input type="file" id="file-input" accept=".pdf,image/*" hidden />
+            <button type="button" id="upload-button" title="Importer un PDF ou une image">
+              <i data-lucide="paperclip"></i>
+            </button>
             <input type="text" id="question-input" placeholder="Posez votre question ici (ex: Qu'est-ce que la transformée de Fourier ?)..." autocomplete="off" />
             <button type="submit" id="send-button">
               <i data-lucide="send"></i>

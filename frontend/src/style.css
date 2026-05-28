@@ -378,6 +378,23 @@ body {
 #topic-select:focus { border-color: rgba(99, 102, 241, 0.5); }
 #topic-select option { background: #0f172a; color: var(--text-main); }
 
+#upload-button {
+  background: rgba(255,255,255,0.06);
+  color: var(--text-main);
+  border: none;
+  width: 44px;
+  height: 44px;
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  transition: all 0.2s ease;
+  flex-shrink: 0;
+}
+#upload-button:hover { background: rgba(99, 102, 241, 0.25); }
+#upload-button svg { width: 19px; height: 19px; }
+
 #send-button {
   background: var(--primary);
   color: white;
