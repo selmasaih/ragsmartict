@@ -360,6 +360,24 @@ body {
 
 #question-input::placeholder { color: #64748b; }
 
+#question-input:disabled { opacity: 0.5; }
+
+#topic-select {
+  background: rgba(255,255,255,0.04);
+  border: 1px solid rgba(255,255,255,0.08);
+  color: var(--text-main);
+  font-family: inherit;
+  font-size: 0.85rem;
+  border-radius: 1.5rem;
+  padding: 0.4rem 0.75rem;
+  outline: none;
+  cursor: pointer;
+  max-width: 160px;
+}
+
+#topic-select:focus { border-color: rgba(99, 102, 241, 0.5); }
+#topic-select option { background: #0f172a; color: var(--text-main); }
+
 #send-button {
   background: var(--primary);
   color: white;
