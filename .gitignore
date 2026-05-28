@@ -7,3 +7,6 @@ __pycache__/
 .DS_Store
 .streamlit/
 node_modules/
+*.log
+frontend/dist/
+.pytest_cache/
