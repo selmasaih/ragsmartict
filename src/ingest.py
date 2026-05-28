@@ -8,6 +8,7 @@ from src.config import (
     NOTES_PATH, CHROMA_DB_PATH, CHUNK_SIZE, CHUNK_OVERLAP,
     EMBEDDING_MODEL, COLLECTION_NAME
 )
+from src.topics import classify
 
 def ingest_documents(reset=False):
     if not os.path.exists(NOTES_PATH):
@@ -75,10 +76,17 @@ def ingest_documents(reset=False):
                         "subject": subject,
                         "page_number": page_num + 1,
                         "chunk_index": i,
-                        "text": chunk
                     })
 
             if all_chunks:
+                # Classify the whole document into a canonical Smart ICT topic
+                # using filename + folder + a sample of its text.
+                sample = " ".join(all_chunks[:2])[:1500]
+                topic = classify(filename, subject, sample, model=model)
+                for meta in all_metadatas:
+                    meta["topic"] = topic
+                print(f"  -> topic: {topic}")
+
                 # Batch encode all chunks for the entire PDF at once (massive speedup)
                 embeddings = model.encode(all_chunks, normalize_embeddings=True).tolist()
                 
