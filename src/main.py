@@ -4,16 +4,23 @@ from contextlib import asynccontextmanager
 from typing import Optional, List, Dict, Any
 
 import chromadb
-from fastapi import FastAPI, HTTPException, UploadFile, File
+from fastapi import FastAPI, HTTPException, UploadFile, File, Header, Request, Depends
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
+from slowapi import Limiter
+from slowapi.util import get_remote_address
+from slowapi.errors import RateLimitExceeded
+from slowapi import _rate_limit_exceeded_handler
 
-from src.query import answer_question, stream_answer, warmup_models, list_topics, add_file_to_index
+from src.query import (
+    answer_question, stream_answer, warmup_models, list_topics,
+    add_file_to_index, list_documents, delete_document,
+)
 from src.extract import IMAGE_EXTS, ocr_available
 from src.config import (
     CHROMA_DB_PATH, COLLECTION_NAME, CORS_ORIGINS, MAX_QUESTION_CHARS,
-    LLM_PROVIDER, NOTES_PATH, validate,
+    LLM_PROVIDER, NOTES_PATH, API_KEY, RATE_LIMIT, validate,
 )
 from src.logger import get_logger
 
@@ -22,6 +29,13 @@ ALLOWED_UPLOAD_EXTS = {".pdf"} | IMAGE_EXTS
 MAX_UPLOAD_BYTES = 25 * 1024 * 1024
 
 log = get_logger("rag.api")
+limiter = Limiter(key_func=get_remote_address)
+
+
+def require_api_key(x_api_key: Optional[str] = Header(default=None)):
+    """No-op unless API_KEY is configured; then enforce X-API-Key header."""
+    if API_KEY and x_api_key != API_KEY:
+        raise HTTPException(status_code=401, detail="Clé API invalide ou manquante.")
 
 
 @asynccontextmanager
@@ -33,12 +47,14 @@ async def lifespan(app: FastAPI):
 
 
 app = FastAPI(title="INPT Smart ICT Notes API", lifespan=lifespan)
+app.state.limiter = limiter
+app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
 
 app.add_middleware(
     CORSMiddleware,
     allow_origins=CORS_ORIGINS,
     allow_credentials="*" not in CORS_ORIGINS,
-    allow_methods=["GET", "POST"],
+    allow_methods=["GET", "POST", "DELETE"],
     allow_headers=["*"],
 )
 
@@ -47,6 +63,11 @@ class QueryRequest(BaseModel):
     question: str = Field(..., min_length=1)
     history: Optional[List[Dict[str, Any]]] = []
     topic: Optional[str] = None
+
+
+class DeleteRequest(BaseModel):
+    filename: str = Field(..., min_length=1)
+    subject: Optional[str] = None
 
 
 def _validate_question(request: QueryRequest) -> str:
@@ -88,8 +109,22 @@ def get_topics():
     return {"topics": list_topics()}
 
 
-@app.post("/api/upload")
-async def upload_file(file: UploadFile = File(...)):
+@app.get("/api/documents")
+def get_documents():
+    return {"documents": list_documents()}
+
+
+@app.delete("/api/documents", dependencies=[Depends(require_api_key)])
+def remove_document(request: DeleteRequest):
+    removed = delete_document(request.filename, subject=request.subject)
+    if removed == 0:
+        raise HTTPException(status_code=404, detail="Document introuvable.")
+    return {"filename": request.filename, "chunks_removed": removed}
+
+
+@app.post("/api/upload", dependencies=[Depends(require_api_key)])
+@limiter.limit(RATE_LIMIT)
+async def upload_file(request: Request, file: UploadFile = File(...)):
     ext = os.path.splitext(file.filename or "")[1].lower()
     if ext not in ALLOWED_UPLOAD_EXTS:
         raise HTTPException(
@@ -119,31 +154,34 @@ async def upload_file(file: UploadFile = File(...)):
 
     if n == 0:
         hint = ""
-        if ext in IMAGE_EXTS and not ocr_available():
-            hint = " (OCR indisponible : installez Tesseract pour les images)."
+        if not ocr_available():
+            hint = " (OCR indisponible : impossible de lire les images/scans)."
         raise HTTPException(
             status_code=422,
-            detail=f"Aucun texte exploitable extrait de ce fichier{hint}",
+            detail=f"Aucun texte exploitable extrait de ce fichier{hint} "
+                   "Le PDF est peut-être protégé par mot de passe ou vide.",
         )
 
     return {"filename": safe_name, "chunks_added": n, "topic": topic}
 
 
-@app.post("/api/query")
-def query_rag(request: QueryRequest):
-    question = _validate_question(request)
-    result = answer_question(question, history=request.history, topic=request.topic)
+@app.post("/api/query", dependencies=[Depends(require_api_key)])
+@limiter.limit(RATE_LIMIT)
+def query_rag(request: Request, body: QueryRequest):
+    question = _validate_question(body)
+    result = answer_question(question, history=body.history, topic=body.topic)
     if "error" in result:
         raise HTTPException(status_code=500, detail=result["error"])
     return result
 
 
-@app.post("/api/query/stream")
-def query_rag_stream(request: QueryRequest):
-    question = _validate_question(request)
+@app.post("/api/query/stream", dependencies=[Depends(require_api_key)])
+@limiter.limit(RATE_LIMIT)
+def query_rag_stream(request: Request, body: QueryRequest):
+    question = _validate_question(body)
 
     def event_stream():
-        for event in stream_answer(question, history=request.history, topic=request.topic):
+        for event in stream_answer(question, history=body.history, topic=body.topic):
             yield f"data: {json.dumps(event, ensure_ascii=False)}\n\n"
 
     return StreamingResponse(
