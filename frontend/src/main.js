@@ -121,17 +121,24 @@ function createStreamingMessage() {
 }
 
 let chatHistory = [];
+let currentController = null;
 
+// While sending, the send button becomes a stop button.
 function setSendingState(sending) {
   questionInput.disabled = sending;
   const btn = document.getElementById('send-button');
-  if (btn) btn.disabled = sending;
+  if (!btn) return;
+  btn.disabled = false;
+  btn.innerHTML = sending ? '<i data-lucide="square"></i>' : '<i data-lucide="send"></i>';
+  refreshIcons();
 }
 
 async function streamAnswer(question, handles) {
+  currentController = new AbortController();
   const res = await fetch(`${API_BASE}/query/stream`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
+    signal: currentController.signal,
     body: JSON.stringify({
       question,
       history: chatHistory,
@@ -174,15 +181,20 @@ async function streamAnswer(question, handles) {
     chatBox.scrollTop = chatBox.scrollHeight;
   };
 
-  while (true) {
-    const { value, done } = await reader.read();
-    if (done) break;
-    buffer += decoder.decode(value, { stream: true });
-    const parts = buffer.split('\n\n');
-    buffer = parts.pop();
-    for (const part of parts) flushEvent(part.trim());
+  try {
+    while (true) {
+      const { value, done } = await reader.read();
+      if (done) break;
+      buffer += decoder.decode(value, { stream: true });
+      const parts = buffer.split('\n\n');
+      buffer = parts.pop();
+      for (const part of parts) flushEvent(part.trim());
+    }
+    if (buffer.trim()) flushEvent(buffer.trim());
+  } catch (err) {
+    if (err.name !== 'AbortError') throw err;
+    // Stopped by the user: keep the partial answer.
   }
-  if (buffer.trim()) flushEvent(buffer.trim());
 
   return answer;
 }
@@ -298,6 +310,13 @@ if (uploadButton && fileInput) {
 
 chatForm.addEventListener('submit', async (e) => {
   e.preventDefault();
+
+  // If a response is streaming, the button acts as "stop".
+  if (currentController) {
+    currentController.abort();
+    return;
+  }
+
   const question = questionInput.value.trim();
   if (!question) return;
 
@@ -313,10 +332,29 @@ chatForm.addEventListener('submit', async (e) => {
     chatHistory.push({ role: 'assistant', content: answer });
     if (chatHistory.length > 6) chatHistory = chatHistory.slice(chatHistory.length - 6);
   } catch (error) {
-    handles.body.innerHTML = `<p style="color:#ef4444;">Impossible de se connecter au serveur Backend. Assurez-vous que FastAPI est lancé sur le port 8000.</p>`;
-    console.error(error);
+    if (error.name !== 'AbortError') {
+      handles.body.innerHTML = `<p style="color:#ef4444;">Impossible de se connecter au serveur Backend. Assurez-vous que FastAPI est lancé sur le port 8000.</p>`;
+      console.error(error);
+    }
   } finally {
+    currentController = null;
     setSendingState(false);
     questionInput.focus();
   }
 });
+
+const newChatButton = document.getElementById('new-chat-button');
+if (newChatButton) {
+  newChatButton.addEventListener('click', () => {
+    if (currentController) currentController.abort();
+    chatHistory = [];
+    chatBox.innerHTML = `
+      <div class="message assistant-message">
+        <div class="avatar"><i data-lucide="bot"></i></div>
+        <div class="message-content">
+          <p>Nouvelle conversation. Posez votre question sur les cours Smart ICT.</p>
+        </div>
+      </div>`;
+    refreshIcons();
+  });
+}
