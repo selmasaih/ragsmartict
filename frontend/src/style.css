@@ -395,7 +395,7 @@ body {
 #upload-button:hover { background: rgba(99, 102, 241, 0.25); }
 #upload-button svg { width: 19px; height: 19px; }
 
-#manage-button {
+#manage-button, #new-chat-button {
   background: transparent;
   border: none;
   color: var(--text-main);
@@ -404,8 +404,8 @@ body {
   opacity: 0.7;
   display: inline-flex;
 }
-#manage-button:hover { opacity: 1; }
-#manage-button svg { width: 18px; height: 18px; }
+#manage-button:hover, #new-chat-button:hover { opacity: 1; }
+#manage-button svg, #new-chat-button svg { width: 18px; height: 18px; }
 
 .docs-panel {
   position: absolute;
