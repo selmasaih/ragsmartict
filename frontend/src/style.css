@@ -395,6 +395,59 @@ body {
 #upload-button:hover { background: rgba(99, 102, 241, 0.25); }
 #upload-button svg { width: 19px; height: 19px; }
 
+#manage-button {
+  background: transparent;
+  border: none;
+  color: var(--text-main);
+  cursor: pointer;
+  margin-left: 8px;
+  opacity: 0.7;
+  display: inline-flex;
+}
+#manage-button:hover { opacity: 1; }
+#manage-button svg { width: 18px; height: 18px; }
+
+.docs-panel {
+  position: absolute;
+  top: 80px;
+  right: 16px;
+  width: min(420px, 90vw);
+  max-height: 70vh;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 16px;
+  border-radius: 1rem;
+  z-index: 50;
+}
+.docs-panel-header { display: flex; justify-content: space-between; align-items: center; }
+.docs-panel-header button { background: transparent; border: none; color: var(--text-main); cursor: pointer; opacity: 0.7; }
+.docs-panel-header button:hover { opacity: 1; }
+#docs-filter {
+  background: rgba(0,0,0,0.25);
+  border: 1px solid rgba(255,255,255,0.08);
+  color: var(--text-main);
+  border-radius: 0.6rem;
+  padding: 0.5rem 0.75rem;
+  font-family: inherit;
+  outline: none;
+}
+.docs-list { overflow-y: auto; display: flex; flex-direction: column; gap: 6px; }
+.doc-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 8px 10px;
+  background: rgba(255,255,255,0.03);
+  border-radius: 0.6rem;
+}
+.doc-name { font-size: 0.88rem; word-break: break-word; }
+.doc-sub { font-size: 0.75rem; opacity: 0.6; }
+.doc-del { background: transparent; border: none; color: #ef4444; cursor: pointer; opacity: 0.7; flex-shrink: 0; }
+.doc-del:hover { opacity: 1; }
+.doc-del svg { width: 17px; height: 17px; }
+
 #send-button {
   background: var(--primary);
   color: white;
