@@ -187,6 +187,85 @@ async function streamAnswer(question, handles) {
   return answer;
 }
 
+const manageButton = document.getElementById('manage-button');
+const docsPanel = document.getElementById('docs-panel');
+const docsClose = document.getElementById('docs-close');
+const docsList = document.getElementById('docs-list');
+const docsFilter = document.getElementById('docs-filter');
+let allDocs = [];
+
+function renderDocs() {
+  const q = (docsFilter.value || '').toLowerCase();
+  const docs = allDocs.filter(
+    (d) => !q || (d.filename || '').toLowerCase().includes(q) || (d.topic || '').toLowerCase().includes(q)
+  );
+  if (docs.length === 0) {
+    docsList.innerHTML = `<p style="opacity:.6;padding:8px;">Aucun document.</p>`;
+    return;
+  }
+  docsList.innerHTML = docs
+    .map(
+      (d) => `
+      <div class="doc-row">
+        <div class="doc-meta">
+          <div class="doc-name">${escapeHtml(d.filename || '?')}</div>
+          <div class="doc-sub">${escapeHtml(d.topic || '—')} · ${d.chunks} extraits</div>
+        </div>
+        <button class="doc-del" data-file="${escapeHtml(d.filename)}" data-sub="${escapeHtml(d.subject || '')}" title="Supprimer">
+          <i data-lucide="trash-2"></i>
+        </button>
+      </div>`
+    )
+    .join('');
+  refreshIcons();
+  docsList.querySelectorAll('.doc-del').forEach((btn) => {
+    btn.addEventListener('click', async () => {
+      const filename = btn.getAttribute('data-file');
+      const subject = btn.getAttribute('data-sub') || null;
+      if (!confirm(`Supprimer "${filename}" de la base ?`)) return;
+      btn.disabled = true;
+      try {
+        const res = await fetch(`${API_BASE}/documents`, {
+          method: 'DELETE',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ filename, subject }),
+        });
+        if (res.ok) {
+          allDocs = allDocs.filter((d) => !(d.filename === filename && (d.subject || '') === (subject || '')));
+          renderDocs();
+          fetchStats();
+        } else {
+          const data = await res.json();
+          alert(`Erreur: ${data.detail || 'suppression impossible'}`);
+          btn.disabled = false;
+        }
+      } catch {
+        alert('Impossible de joindre le serveur.');
+        btn.disabled = false;
+      }
+    });
+  });
+}
+
+async function openDocsPanel() {
+  docsPanel.hidden = false;
+  docsList.innerHTML = `<p style="opacity:.6;padding:8px;">Chargement…</p>`;
+  try {
+    const res = await fetch(`${API_BASE}/documents`);
+    const data = await res.json();
+    allDocs = data.documents || [];
+    renderDocs();
+  } catch {
+    docsList.innerHTML = `<p style="color:#ef4444;padding:8px;">Erreur de chargement.</p>`;
+  }
+}
+
+if (manageButton) {
+  manageButton.addEventListener('click', openDocsPanel);
+  docsClose.addEventListener('click', () => (docsPanel.hidden = true));
+  docsFilter.addEventListener('input', renderDocs);
+}
+
 if (uploadButton && fileInput) {
   uploadButton.addEventListener('click', () => fileInput.click());
   fileInput.addEventListener('change', async () => {
