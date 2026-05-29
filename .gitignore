@@ -10,3 +10,4 @@ node_modules/
 *.log
 frontend/dist/
 .pytest_cache/
+bm25_cache.pkl
