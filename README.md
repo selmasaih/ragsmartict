@@ -1,79 +1,91 @@
 # INPT Smart ICT Notes RAG
 
-A smart virtual assistant based on the RAG (Retrieval-Augmented Generation) architecture to query your INPT Smart ICT course notes.
+Assistant virtuel basé sur une architecture RAG (Retrieval-Augmented Generation) pour interroger les notes de cours de la filière Smart ICT (INPT Rabat).
 
-## ✨ Features
+## ✨ Fonctionnalités
 
-- 📡 **Streaming responses:** The answer is streamed token-by-token to the chat UI over Server-Sent Events (SSE), so you see it appear live instead of waiting for the full generation.
-- 📄 **Optimized Ingestion:** Text extraction with `RecursiveCharacterTextSplitter` and batch embedding encoding for fast document ingestion.
-- 🚀 **Parallel Hybrid Retrieval:** Simultaneous ChromaDB (vector) and BM25 (lexical) search via a `ThreadPoolExecutor`, followed by Cross-Encoder re-ranking.
-- 🏷️ **Subject filtering:** Restrict retrieval to a single subject (folder) from the UI dropdown.
-- 🧠 **Conversational Memory:** Follow-up questions keep the context of previous messages.
-- 🗄️ **Vector Database:** Persistent local storage with ChromaDB.
-- 🤖 **Pluggable LLM:** Local models via **Ollama** (full privacy) or cloud via the **Google Gemini API**, selected with one env var.
-- 🔒 **Hardened API:** Configurable CORS allow-list, input-length validation, `/api/health` check, and structured logging.
-- 🧪 **Tested:** Unit tests for the retrieval/generation helpers (including the streaming think-tag filter).
+- 📡 **Réponses en streaming** — la réponse s'affiche token par token via Server-Sent Events (SSE).
+- 🚀 **Recherche hybride parallèle** — ChromaDB (vectoriel) + BM25 (lexical) en parallèle, puis re-ranking par cross-encoder.
+- 🏷️ **Classement automatique par domaine** — chaque document est rangé dans l'un des 8 domaines Smart ICT (nom + contenu), filtrable depuis l'UI.
+- 📥 **Import de fichiers** — upload de PDF ou d'images ; extraction (PyMuPDF) + OCR (easyocr, sans Tesseract requis) + indexation à chaud.
+- 🗂️ **Gestion des documents** — lister / filtrer / supprimer les documents indexés depuis l'interface.
+- 🔢 **Citations numérotées** — extraits numérotés `[1] [2]…` cités dans la réponse et listés en dessous.
+- 🧠 **Mémoire conversationnelle** — les questions de suivi gardent le contexte.
+- 🤖 **LLM au choix** — local via **Ollama** (privé) ou cloud via **Google Gemini**.
+- 🔒 **API durcie** — CORS configurable, validation des entrées, clé API optionnelle, rate limiting, `/api/health`, logs structurés.
+- 🧪 **Testé + CI** — tests unitaires (helpers) et API (TestClient) ; GitHub Actions lance lint + tests + build frontend.
+- 📊 **Harnais d'évaluation** — `scripts/eval_retrieval.py` mesure hit@k / MRR sur un jeu de questions labellisées.
 
 ## 🏗️ Architecture
 
-1. **Backend (FastAPI):** Async REST API exposing the RAG pipeline on port `8000`.
-2. **Frontend (Vite):** Modern HTML/CSS/Vanilla-JS UI that consumes the streaming API.
-3. **RAG Pipeline:**
-   - **Ingestion:** Batch ingestion into ChromaDB (`src/ingest.py`).
-   - **Retrieval:** Parallel BM25 + vector search → Cross-Encoder re-ranking (`src/query.py`).
-   - **Generation:** LLM (Ollama/Gemini) augmented with conversation history, streamed back to the client.
+1. **Backend (FastAPI)** — API REST asynchrone exposant le pipeline RAG (port `8000`).
+2. **Frontend (Vite)** — interface HTML/CSS/JS qui consomme l'API en streaming.
+3. **Pipeline RAG**
+   - **Ingestion** (`src/ingest.py`) — extraction PyMuPDF/OCR → chunking → classement par domaine → embeddings e5 (`passage:`) → ChromaDB.
+   - **Recherche** (`src/query.py`) — BM25 + vectoriel en parallèle → re-ranking cross-encoder → diversification (cap par document).
+   - **Génération** — LLM (Ollama/Gemini) augmenté de l'historique, streamé au client.
 
-### API endpoints
+### Endpoints
 
-| Method | Path                 | Purpose                                            |
-| ------ | -------------------- | -------------------------------------------------- |
-| GET    | `/api/health`        | Liveness + collection status + active LLM provider |
-| GET    | `/api/stats`         | Number of indexed chunks                           |
-| GET    | `/api/topics`        | Distinct canonical topics available for filtering  |
-| POST   | `/api/query`         | Non-streaming answer (JSON)                        |
-| POST   | `/api/query/stream`  | Streaming answer (SSE: `sources` → `token`* → `done`) |
+| Méthode | Chemin                | Rôle                                                  |
+| ------- | --------------------- | ----------------------------------------------------- |
+| GET     | `/api/health`         | État + nombre de chunks + provider LLM                |
+| GET     | `/api/stats`          | Nombre de chunks indexés                              |
+| GET     | `/api/topics`         | Domaines disponibles pour le filtre                   |
+| GET     | `/api/documents`      | Liste des documents (nom, domaine, nb d'extraits)     |
+| DELETE  | `/api/documents`      | Supprime un document *(clé API si configurée)*        |
+| POST    | `/api/upload`         | Importe et indexe un PDF/image *(clé API si configurée)* |
+| POST    | `/api/query`          | Réponse non-streamée (JSON)                           |
+| POST    | `/api/query/stream`   | Réponse streamée (SSE : `sources` → `token`* → `done`) |
 
-## 🚀 Installation & Usage
+## 🚀 Installation & utilisation
 
-### Prerequisites
+### Prérequis
 - Python 3.11+
-- Node.js & npm (for the web interface)
-- A local LLM provider (Ollama) or a cloud provider (Google Gemini API)
+- Node.js & npm (pour l'interface)
+- Ollama (local) ou une clé Google Gemini (cloud)
 
-### 1. Backend configuration
+### 1. Backend
 ```bash
 python -m venv venv
-source venv/bin/activate        # Windows: venv\Scripts\activate
+source venv/bin/activate        # Windows : venv\Scripts\activate
 pip install -r requirements.txt
-cp .env.example .env            # then edit it
+cp .env.example .env            # puis éditer
 ```
-Set `LLM_PROVIDER="ollama"` or `"gemini"` in `.env`. See `.env.example` for all options (CORS origins, model names, question size limit, log level, …).
+Choisir `LLM_PROVIDER="ollama"` ou `"gemini"`. Voir `.env.example` pour toutes les options (CORS, modèles, `API_KEY`, `RATE_LIMIT`, `BM25_MAX_DOCS`, …).
 
-### 2. Data ingestion
-Place your PDFs under `notes/` (e.g. `notes/signal_processing/`). The sub-folder name becomes the document's **subject**.
+### 2. Ingestion
+Placer les fichiers (PDF/images) sous `notes/` (le nom du sous-dossier sert d'origine ; le domaine est déduit automatiquement).
 ```bash
-python -m src.ingest            # add --reset to clear the collection first
+python -m src.ingest            # --reset pour repartir de zéro
 ```
+Reclasser les documents existants : `python -m scripts.classify_topics` (édite `topic_mapping.tsv`) puis `python -m scripts.apply_topics`.
 
-### 3. Launch backend + frontend
-On Windows, one script starts both:
+### 3. Lancer backend + frontend
 ```powershell
 powershell -ExecutionPolicy Bypass -File scripts\dev.ps1
 ```
-Or run them manually:
+Ou manuellement :
 ```bash
-# Terminal 1 — API
-python -m uvicorn src.main:app --reload --host 127.0.0.1 --port 8000
-# Terminal 2 — UI
-cd frontend && npm install && npm run dev
+python -m uvicorn src.main:app --reload --host 127.0.0.1 --port 8000   # API
+cd frontend && npm install && npm run dev                              # UI
 ```
-Open the Vite link (usually `http://localhost:5173`).
+> URL de l'API côté frontend surchargée par `VITE_API_BASE` (défaut `http://127.0.0.1:8000/api`).
 
-> The frontend's API base URL can be overridden with the `VITE_API_BASE` env var (defaults to `http://127.0.0.1:8000/api`).
-
-### 4. Run the tests
+### 4. Tests & évaluation
 ```bash
-python -m pytest tests/ -q
+python -m pytest tests/ -q          # tests unitaires + API
+python -m scripts.eval_retrieval    # hit@k / MRR du retrieval
 ```
 
-*(The legacy Streamlit UI is still available via `streamlit run src/app.py`.)*
+### 5. Docker (backend)
+```bash
+docker build -t inpt-rag .
+docker run -p 8000:8000 -v "$PWD/chroma_db:/app/chroma_db" -v "$PWD/notes:/app/notes" inpt-rag
+```
+
+## 🔐 Sécurité
+- `CORS_ORIGINS` — liste blanche d'origines (ne pas laisser `*` en prod).
+- `API_KEY` — si définie, header `X-API-Key` requis sur `upload` / `query` / `delete`.
+- `RATE_LIMIT` — limite par client (défaut `30/minute`).
+- La sortie markdown du LLM est nettoyée (DOMPurify) côté client.
