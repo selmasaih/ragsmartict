@@ -1,9 +1,18 @@
+import os
 import re
 import time
 import json
+import pickle
 import functools
+from collections import OrderedDict
+
 import requests
 import chromadb
+
+try:
+    from langdetect import detect as _detect_lang
+except Exception:
+    _detect_lang = None
 from rank_bm25 import BM25Okapi
 from sentence_transformers import SentenceTransformer, CrossEncoder
 from src.config import (
@@ -34,6 +43,44 @@ _BM25_INDEX = None
 _BM25_DOCS = None
 _BM25_METAS = None
 _RERANKER = None
+
+_BM25_CACHE_PATH = os.path.join(os.path.dirname(CHROMA_DB_PATH), "bm25_cache.pkl")
+
+# Bounded LRU cache of answers for repeated questions (no history only).
+_ANSWER_CACHE = OrderedDict()
+_ANSWER_CACHE_MAX = 128
+
+
+def _answer_cache_key(question: str, topic):
+    return (question.strip().lower(), topic or "")
+
+
+def _answer_cache_get(key):
+    if key in _ANSWER_CACHE:
+        _ANSWER_CACHE.move_to_end(key)
+        return _ANSWER_CACHE[key]
+    return None
+
+
+def _answer_cache_put(key, value):
+    _ANSWER_CACHE[key] = value
+    _ANSWER_CACHE.move_to_end(key)
+    while len(_ANSWER_CACHE) > _ANSWER_CACHE_MAX:
+        _ANSWER_CACHE.popitem(last=False)
+
+
+def _invalidate_caches():
+    """Drop caches that depend on the corpus (after upload/delete)."""
+    global _BM25_INDEX, _BM25_DOCS, _BM25_METAS
+    _BM25_INDEX = None
+    _BM25_DOCS = None
+    _BM25_METAS = None
+    _ANSWER_CACHE.clear()
+    try:
+        if os.path.exists(_BM25_CACHE_PATH):
+            os.remove(_BM25_CACHE_PATH)
+    except OSError:
+        pass
 
 
 def _get_embedding_model():
@@ -93,7 +140,22 @@ def _make_candidate_id(meta, fallback: str) -> str:
     return fallback
 
 
-def _build_system_prompt():
+_LANG_NAMES = {"fr": "francais", "en": "anglais", "es": "espagnol", "ar": "arabe", "de": "allemand"}
+
+
+def _detect_language(text: str) -> str:
+    """Best-effort language code of the question; defaults to French."""
+    if not _detect_lang or not text or len(text.strip()) < 3:
+        return "fr"
+    try:
+        code = _detect_lang(text)
+        return code if code in _LANG_NAMES else "fr"
+    except Exception:
+        return "fr"
+
+
+def _build_system_prompt(lang: str = "fr"):
+    lang_name = _LANG_NAMES.get(lang, "francais")
     return (
         "Tu es un assistant expert pour un etudiant ingenieur a INPT Rabat (filiere Smart ICT). "
         "Adopte un ton professionnel, précis et scientifique. "
@@ -101,7 +163,7 @@ def _build_system_prompt():
         "REVISE TES SOURCES : Avant de repondre, verifie si les informations sont coherentes. "
         "Si deux extraits semblent se contredire (ex: differentes annees ou matieres), precise-le. "
         "NE HALUCINE PAS : Si l'information exacte n'est pas dans les extraits, dis 'Information non trouvee'. "
-        "Reponds UNIQUEMENT en francais et UNIQUEMENT avec les extraits fournis. "
+        f"Reponds en {lang_name} (la langue de la question) et UNIQUEMENT avec les extraits fournis. "
         "Chaque extrait est numerote [1], [2], etc. Cite la source pertinente en fin de phrase "
         "avec son numero entre crochets (ex: ...selon la definition [2].). N'invente pas de numeros."
     )
@@ -265,12 +327,39 @@ def _rewrite_query(question: str) -> str:
         return question
 
 
+def _load_bm25_cache(total):
+    try:
+        if not os.path.exists(_BM25_CACHE_PATH):
+            return None
+        with open(_BM25_CACHE_PATH, "rb") as fh:
+            data = pickle.load(fh)
+        if data.get("count") == total:
+            return data["index"], data["docs"], data["metas"]
+    except Exception as e:
+        log.warning("BM25 cache load failed: %s", e)
+    return None
+
+
+def _save_bm25_cache(total):
+    try:
+        with open(_BM25_CACHE_PATH, "wb") as fh:
+            pickle.dump({"count": total, "index": _BM25_INDEX, "docs": _BM25_DOCS, "metas": _BM25_METAS}, fh)
+    except Exception as e:
+        log.warning("BM25 cache save failed: %s", e)
+
+
 def _get_bm25_index(collection):
     global _BM25_INDEX, _BM25_DOCS, _BM25_METAS
     if _BM25_INDEX is None:
         total = collection.count()
         if total <= 0:
             return None
+
+        cached = _load_bm25_cache(total)
+        if cached:
+            _BM25_INDEX, _BM25_DOCS, _BM25_METAS = cached
+            log.info("BM25 index loaded from cache (%d docs)", len(_BM25_DOCS))
+            return _BM25_INDEX
 
         max_docs = min(total, BM25_MAX_DOCS) if BM25_MAX_DOCS else total
         page_size = max(1, BM25_PAGE_SIZE)
@@ -298,20 +387,19 @@ def _get_bm25_index(collection):
         _BM25_METAS = metas
         tokenized = [_tokenize(doc) for doc in _BM25_DOCS]
         _BM25_INDEX = BM25Okapi(tokenized) if tokenized else None
+        if _BM25_INDEX is not None:
+            _save_bm25_cache(total)
     return _BM25_INDEX
 
 
 def add_file_to_index(path: str, subject: str = "Uploads"):
     """Ingest a single uploaded file into the live collection and invalidate
     the BM25 cache so it is immediately searchable. Returns (chunks_added, topic)."""
-    global _BM25_INDEX, _BM25_DOCS, _BM25_METAS
     from src.ingest import process_file, make_splitter
     collection = _get_collection()
     model = _get_embedding_model()
     n, topic = process_file(collection, model, make_splitter(), path, subject)
-    _BM25_INDEX = None
-    _BM25_DOCS = None
-    _BM25_METAS = None
+    _invalidate_caches()
     log.info("Uploaded '%s' -> topic=%s (%d chunks)", path, topic, n)
     return n, topic
 
@@ -348,7 +436,6 @@ def list_documents() -> list[dict]:
 def delete_document(filename: str, subject: str = None) -> int:
     """Delete all chunks of a document and invalidate the BM25 cache.
     Returns the number of chunks removed."""
-    global _BM25_INDEX, _BM25_DOCS, _BM25_METAS
     collection = _get_collection()
     if subject:
         where = {"$and": [{"filename": {"$eq": filename}}, {"subject": {"$eq": subject}}]}
@@ -358,9 +445,7 @@ def delete_document(filename: str, subject: str = None) -> int:
     ids = got.get("ids") or []
     if ids:
         collection.delete(ids=ids)
-        _BM25_INDEX = None
-        _BM25_DOCS = None
-        _BM25_METAS = None
+        _invalidate_caches()
     log.info("Deleted document '%s' (subject=%s): %d chunks", filename, subject, len(ids))
     return len(ids)
 
@@ -630,6 +715,12 @@ def answer_question(question: str, history: list = None, topic: str = None) -> d
     if err:
         return err
 
+    cache_key = _answer_cache_key(question, topic) if not history else None
+    if cache_key:
+        cached = _answer_cache_get(cache_key)
+        if cached:
+            return {**cached, "latency_ms": int((time.time() - start_time) * 1000), "cached": True}
+
     context_str, sources, retrieved_chunks, timings = _retrieve(collection, question, topic)
     if not retrieved_chunks:
         return {
@@ -638,13 +729,14 @@ def answer_question(question: str, history: list = None, topic: str = None) -> d
         }
 
     user_message = _build_user_message(context_str, history, question)
+    system_prompt = _build_system_prompt(_detect_language(question))
 
     t = time.time()
     try:
         if LLM_PROVIDER == "gemini":
-            answer = _call_gemini(user_message, system_prompt=_build_system_prompt())
+            answer = _call_gemini(user_message, system_prompt=system_prompt)
         else:
-            answer = _call_ollama(user_message, system_prompt=_build_system_prompt())
+            answer = _call_ollama(user_message, system_prompt=system_prompt)
     except Exception as e:
         error_text = str(e)
         if "Connection" in error_text or "ConnectionRefusedError" in error_text:
@@ -664,6 +756,8 @@ def answer_question(question: str, history: list = None, topic: str = None) -> d
 
     latency_ms = int((time.time() - start_time) * 1000)
     log.info("Timings: %s | Total: %dms", timings, latency_ms)
+    if cache_key:
+        _answer_cache_put(cache_key, {"answer": answer, "sources": sources})
     return {"answer": answer, "sources": sources, "latency_ms": latency_ms, "timings": timings}
 
 
@@ -682,6 +776,15 @@ def stream_answer(question: str, history: list = None, topic: str = None):
         yield {"type": "error", "error": err["error"]}
         return
 
+    cache_key = _answer_cache_key(question, topic) if not history else None
+    if cache_key:
+        cached = _answer_cache_get(cache_key)
+        if cached:
+            yield {"type": "sources", "sources": cached["sources"]}
+            yield {"type": "token", "text": cached["answer"]}
+            yield {"type": "done", "latency_ms": int((time.time() - start_time) * 1000), "cached": True}
+            return
+
     context_str, sources, retrieved_chunks, timings = _retrieve(collection, question, topic)
     if not retrieved_chunks:
         yield {"type": "sources", "sources": []}
@@ -693,13 +796,15 @@ def stream_answer(question: str, history: list = None, topic: str = None):
     yield {"type": "sources", "sources": sources}
 
     user_message = _build_user_message(context_str, history, question)
-    system_prompt = _build_system_prompt()
+    system_prompt = _build_system_prompt(_detect_language(question))
 
     produced_any = False
+    answer_parts = []
     try:
         generator = _stream_gemini if LLM_PROVIDER == "gemini" else _stream_ollama
         for piece in generator(user_message, system_prompt=system_prompt):
             produced_any = True
+            answer_parts.append(piece)
             yield {"type": "token", "text": piece}
     except Exception as e:
         error_text = str(e)
@@ -713,7 +818,10 @@ def stream_answer(question: str, history: list = None, topic: str = None):
                 )
             yield {"type": "token", "text": fallback}
         yield {"type": "error", "error": error_text}
+        answer_parts = []
 
     latency_ms = int((time.time() - start_time) * 1000)
     log.info("Stream timings: %s | Total: %dms", timings, latency_ms)
+    if cache_key and answer_parts:
+        _answer_cache_put(cache_key, {"answer": "".join(answer_parts), "sources": sources})
     yield {"type": "done", "latency_ms": latency_ms}
