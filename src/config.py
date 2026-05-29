@@ -38,6 +38,10 @@ LOG_LEVEL = os.getenv("LOG_LEVEL", "INFO").upper()
 CORS_ORIGINS = _env_list("CORS_ORIGINS", "http://localhost:5173,http://127.0.0.1:5173")
 MAX_QUESTION_CHARS = _env_int("MAX_QUESTION_CHARS", 2000)
 MAX_HISTORY_MESSAGES = _env_int("MAX_HISTORY_MESSAGES", 6)
+# Optional API key: when set, mutating endpoints require header X-API-Key.
+API_KEY = os.getenv("API_KEY") or None
+# Per-client rate limit for query/upload endpoints (slowapi syntax).
+RATE_LIMIT = os.getenv("RATE_LIMIT", "30/minute")
 
 # ── LLM provider ("ollama" or "gemini") ──────────────────────────────
 LLM_PROVIDER = os.getenv("LLM_PROVIDER", "ollama").lower()  # "ollama" or "gemini"
@@ -74,6 +78,7 @@ BM25_MAX_DOCS = 20000
 # ── Context window limits ────────────────────────────────────────────
 CONTEXT_MAX_CHARS = 4000          # total context sent to LLM
 CONTEXT_MAX_CHUNK_CHARS = 800     # per-chunk cap
+MAX_CHUNKS_PER_DOC = _env_int("MAX_CHUNKS_PER_DOC", 2)  # diversify sources
 
 # ── Query rewrite (DISABLED — saves a full LLM round-trip) ──────────
 ENABLE_QUERY_REWRITE = _env_bool("ENABLE_QUERY_REWRITE", False)
