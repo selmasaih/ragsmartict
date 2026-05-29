@@ -1,6 +1,7 @@
 import re
 import time
 import json
+import functools
 import requests
 import chromadb
 from rank_bm25 import BM25Okapi
@@ -10,7 +11,7 @@ from src.config import (
     OLLAMA_MODEL, OLLAMA_API_URL, COLLECTION_NAME, TOP_K,
     OLLAMA_KEEP_ALIVE, OLLAMA_TIMEOUT_S,
     OLLAMA_NUM_PREDICT, OLLAMA_TEMPERATURE, OLLAMA_TOP_P, OLLAMA_TOP_K,
-    CONTEXT_MAX_CHARS, CONTEXT_MAX_CHUNK_CHARS,
+    CONTEXT_MAX_CHARS, CONTEXT_MAX_CHUNK_CHARS, MAX_CHUNKS_PER_DOC,
     VECTOR_K, BM25_K, RERANK_TOP_K, RERANKER_MODEL, ENABLE_RERANK,
     ENABLE_QUERY_REWRITE, REWRITE_MAX_WORDS,
     BM25_PAGE_SIZE, BM25_MAX_DOCS, MAX_HISTORY_MESSAGES,
@@ -40,6 +41,13 @@ def _get_embedding_model():
     if _EMBED_MODEL is None:
         _EMBED_MODEL = SentenceTransformer(EMBEDDING_MODEL)
     return _EMBED_MODEL
+
+
+@functools.lru_cache(maxsize=256)
+def _embed_query_cached(text: str):
+    # e5 expects a "query: " prefix; cache repeated questions.
+    model = _get_embedding_model()
+    return tuple(model.encode("query: " + text, normalize_embeddings=True).tolist())
 
 
 def _get_collection():
@@ -94,7 +102,8 @@ def _build_system_prompt():
         "Si deux extraits semblent se contredire (ex: differentes annees ou matieres), precise-le. "
         "NE HALUCINE PAS : Si l'information exacte n'est pas dans les extraits, dis 'Information non trouvee'. "
         "Reponds UNIQUEMENT en francais et UNIQUEMENT avec les extraits fournis. "
-        "Ne cite pas les sources dans le texte (ex: [1]); elles sont listees en dessous."
+        "Chaque extrait est numerote [1], [2], etc. Cite la source pertinente en fin de phrase "
+        "avec son numero entre crochets (ex: ...selon la definition [2].). N'invente pas de numeros."
     )
 
 
@@ -307,6 +316,55 @@ def add_file_to_index(path: str, subject: str = "Uploads"):
     return n, topic
 
 
+def list_documents() -> list[dict]:
+    """List indexed documents grouped by (filename, subject) with topic and
+    chunk count. Scans the full collection (BM25 cache may be truncated)."""
+    collection = _get_collection()
+    total = collection.count()
+    agg = {}
+    offset = 0
+    while offset < total:
+        data = collection.get(include=["metadatas"], limit=5000, offset=offset)
+        metas = data.get("metadatas") or []
+        if not metas:
+            break
+        for m in metas:
+            m = m or {}
+            key = (m.get("filename"), m.get("subject"))
+            d = agg.get(key)
+            if d is None:
+                agg[key] = {
+                    "filename": m.get("filename"),
+                    "subject": m.get("subject"),
+                    "topic": m.get("topic"),
+                    "chunks": 1,
+                }
+            else:
+                d["chunks"] += 1
+        offset += len(metas)
+    return sorted(agg.values(), key=lambda x: ((x["topic"] or ""), (x["filename"] or "")))
+
+
+def delete_document(filename: str, subject: str = None) -> int:
+    """Delete all chunks of a document and invalidate the BM25 cache.
+    Returns the number of chunks removed."""
+    global _BM25_INDEX, _BM25_DOCS, _BM25_METAS
+    collection = _get_collection()
+    if subject:
+        where = {"$and": [{"filename": {"$eq": filename}}, {"subject": {"$eq": subject}}]}
+    else:
+        where = {"filename": {"$eq": filename}}
+    got = collection.get(where=where)
+    ids = got.get("ids") or []
+    if ids:
+        collection.delete(ids=ids)
+        _BM25_INDEX = None
+        _BM25_DOCS = None
+        _BM25_METAS = None
+    log.info("Deleted document '%s' (subject=%s): %d chunks", filename, subject, len(ids))
+    return len(ids)
+
+
 def list_topics() -> list[str]:
     """Return the distinct canonical topics present in the collection."""
     try:
@@ -470,9 +528,7 @@ def _retrieve(collection, question: str, topic: str = None):
     timings["query_rewrite_ms"] = int((time.time() - t) * 1000)
 
     t = time.time()
-    model = _get_embedding_model()
-    # multilingual-e5 expects a "query: " prefix on search queries.
-    question_embedding = model.encode("query: " + query_text, normalize_embeddings=True).tolist()
+    question_embedding = list(_embed_query_cached(query_text))
     timings["embedding_ms"] = int((time.time() - t) * 1000)
 
     t = time.time()
@@ -526,21 +582,27 @@ def _retrieve(collection, question: str, topic: str = None):
     used_chunks = []
     used_metas = []
     total_chars = 0
+    per_doc = {}
     for chunk, meta in zip(retrieved_chunks, metadatas):
         if not chunk:
+            continue
+        fname = (meta or {}).get("filename", "Inconnu")
+        # Cap chunks per document so huge textbooks don't crowd out other sources.
+        if per_doc.get(fname, 0) >= MAX_CHUNKS_PER_DOC:
             continue
         snippet = chunk.strip()
         if CONTEXT_MAX_CHUNK_CHARS and len(snippet) > CONTEXT_MAX_CHUNK_CHARS:
             snippet = snippet[:CONTEXT_MAX_CHUNK_CHARS].rstrip() + "…"
-        fname = (meta or {}).get("filename", "Inconnu")
         pnum = (meta or {}).get("page_number", "?")
-        block = f"--- SOURCE: {fname} (Page {pnum}) ---\n{snippet}"
+        cite = len(context_blocks) + 1
+        block = f"[{cite}] SOURCE: {fname} (Page {pnum})\n{snippet}"
         next_total = total_chars + len(block) + 2
         if CONTEXT_MAX_CHARS and next_total > CONTEXT_MAX_CHARS:
             break
         context_blocks.append(block)
         used_chunks.append(chunk)
         used_metas.append(meta)
+        per_doc[fname] = per_doc.get(fname, 0) + 1
         total_chars = next_total
 
     context_str = "\n\n".join(context_blocks)
