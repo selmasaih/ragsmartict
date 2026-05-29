@@ -40,9 +40,11 @@ def embed_passages(model, chunks):
     return model.encode([PASSAGE_PREFIX + c for c in chunks], normalize_embeddings=True).tolist()
 
 
-def process_file(collection, model, text_splitter, path, subject):
+def process_file(collection, model, text_splitter, path, subject, seen_hashes=None):
     """Extract, chunk, classify, embed and add one file to the collection.
-    Returns (chunks_added, topic)."""
+    Skips chunks whose exact content was already seen (when seen_hashes is
+    provided). Returns (chunks_added, topic)."""
+    import hashlib
     filename = os.path.basename(path)
     all_chunks, all_ids, all_metadatas = [], [], []
 
@@ -51,6 +53,11 @@ def process_file(collection, model, text_splitter, path, subject):
             continue
         chunks = text_splitter.split_text(text)
         for i, chunk in enumerate(chunks):
+            if seen_hashes is not None:
+                h = hashlib.md5(chunk.strip().encode("utf-8")).hexdigest()
+                if h in seen_hashes:
+                    continue
+                seen_hashes.add(h)
             all_chunks.append(chunk)
             all_ids.append(f"{subject}|{filename}|p{page_num}|c{i}")
             all_metadatas.append({
@@ -113,12 +120,13 @@ def ingest_documents(reset=False):
 
     total_chunks = 0
     processed = 0
+    seen_hashes = set()  # corpus-wide exact-duplicate chunk dedup
     for path in files:
         filename = os.path.basename(path)
         subject = os.path.basename(os.path.dirname(path))
         print(f"Processing {filename} (Subject: {subject})...")
         try:
-            n, topic = process_file(collection, model, text_splitter, path, subject)
+            n, topic = process_file(collection, model, text_splitter, path, subject, seen_hashes=seen_hashes)
             if n:
                 print(f"  -> topic: {topic} ({n} chunks)")
             total_chunks += n
