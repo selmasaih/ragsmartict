@@ -1,4 +1,4 @@
 #!/bin/bash
-echo "Starting Streamlit App on Azure App Service..."
+echo "Starting FastAPI (RAG) on Azure App Service..."
 python -m pip install -r requirements.txt
-python -m streamlit run src/app.py --server.port 8000 --server.address 0.0.0.0
+python -m uvicorn src.main:app --host 0.0.0.0 --port "${PORT:-8000}"
