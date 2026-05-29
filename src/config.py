@@ -73,7 +73,8 @@ ENABLE_RERANK = True
 RERANK_TOP_K = 5
 RERANKER_MODEL = "cross-encoder/mmarco-mMiniLMv2-L12-H384-v1"
 BM25_PAGE_SIZE = 5000
-BM25_MAX_DOCS = 20000
+# Max chunks indexed for lexical (BM25) search. 0 = no cap (index everything).
+BM25_MAX_DOCS = _env_int("BM25_MAX_DOCS", 0)
 
 # ── Context window limits ────────────────────────────────────────────
 CONTEXT_MAX_CHARS = 4000          # total context sent to LLM
