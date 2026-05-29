@@ -1,6 +1,23 @@
 import os
+
+# Prevent thread/process oversubscription that can livelock ingestion on
+# Windows (set before importing torch/sentence-transformers).
+os.environ.setdefault("OMP_NUM_THREADS", "4")
+os.environ.setdefault("MKL_NUM_THREADS", "4")
+os.environ.setdefault("TOKENIZERS_PARALLELISM", "false")
+
+import sys
 import argparse
+import multiprocessing
 import chromadb
+
+# PDF text can contain glyphs the Windows console (cp1252) cannot encode;
+# make stdout/stderr tolerant so logging never crashes ingestion.
+for _stream in (sys.stdout, sys.stderr):
+    try:
+        _stream.reconfigure(encoding="utf-8", errors="replace")
+    except Exception:
+        pass
 from langchain_text_splitters import RecursiveCharacterTextSplitter
 from sentence_transformers import SentenceTransformer
 from src.config import (
@@ -76,6 +93,11 @@ def ingest_documents(reset=False):
 
     print(f"Loading embedding model: {EMBEDDING_MODEL}...")
     model = SentenceTransformer(EMBEDDING_MODEL)
+    try:
+        import torch
+        torch.set_num_threads(4)
+    except Exception:
+        pass
     text_splitter = make_splitter()
 
     supported = {".pdf"} | IMAGE_EXTS
@@ -108,6 +130,7 @@ def ingest_documents(reset=False):
 
 
 if __name__ == "__main__":
+    multiprocessing.freeze_support()
     parser = argparse.ArgumentParser(description="Ingest PDF/image notes into ChromaDB")
     parser.add_argument("--reset", action="store_true", help="Clear the collection before re-ingestion")
     args = parser.parse_args()
