@@ -407,6 +407,7 @@ body {
 #manage-button:hover, #new-chat-button:hover { opacity: 1; }
 #manage-button svg, #new-chat-button svg { width: 18px; height: 18px; }
 
+.docs-panel[hidden] { display: none; }
 .docs-panel {
   position: absolute;
   top: 80px;
