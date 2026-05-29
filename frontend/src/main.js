@@ -1,6 +1,13 @@
 import './style.css';
 import { createIcons, icons } from 'lucide';
 import { marked } from 'marked';
+import DOMPurify from 'dompurify';
+
+// Render markdown to sanitized HTML (defends against HTML injected via the
+// LLM answer or document sources).
+function renderMarkdown(text) {
+  return DOMPurify.sanitize(marked.parse(text));
+}
 
 createIcons({ icons, nameAttr: 'data-lucide' });
 
@@ -153,7 +160,7 @@ async function streamAnswer(question, handles) {
     }
     if (event.type === 'token') {
       answer += event.text;
-      handles.body.innerHTML = marked.parse(answer);
+      handles.body.innerHTML = renderMarkdown(answer);
     } else if (event.type === 'sources') {
       sources = event.sources || [];
     } else if (event.type === 'done') {
