@@ -25,8 +25,18 @@
           <div class="doc-stats">
             <i data-lucide="database"></i>
             <span id="doc-count">...</span> documents indexés
+            <button id="manage-button" title="Gérer les documents"><i data-lucide="folder-cog"></i></button>
           </div>
         </header>
+
+        <div id="docs-panel" class="docs-panel glass" hidden>
+          <div class="docs-panel-header">
+            <strong>Documents indexés</strong>
+            <button id="docs-close" title="Fermer"><i data-lucide="x"></i></button>
+          </div>
+          <input type="text" id="docs-filter" placeholder="Filtrer par nom ou domaine…" autocomplete="off" />
+          <div id="docs-list" class="docs-list"></div>
+        </div>
 
         <div class="chat-box glass" id="chat-box">
           <div class="message assistant-message">
