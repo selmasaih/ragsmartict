@@ -1,12 +1,33 @@
 import './style.css';
+import 'katex/dist/katex.min.css';
 import { createIcons, icons } from 'lucide';
 import { marked } from 'marked';
 import DOMPurify from 'dompurify';
+import renderMathInElement from 'katex/contrib/auto-render';
 
 // Render markdown to sanitized HTML (defends against HTML injected via the
 // LLM answer or document sources).
 function renderMarkdown(text) {
   return DOMPurify.sanitize(marked.parse(text));
+}
+
+// Typeset LaTeX ($…$, $$…$$, \(…\), \[…\]) inside an element. Runs on the live
+// DOM after sanitization, so KaTeX output isn't stripped by DOMPurify.
+function typesetMath(el) {
+  if (!el) return;
+  try {
+    renderMathInElement(el, {
+      delimiters: [
+        { left: '$$', right: '$$', display: true },
+        { left: '\\[', right: '\\]', display: true },
+        { left: '$', right: '$', display: false },
+        { left: '\\(', right: '\\)', display: false },
+      ],
+      throwOnError: false,
+    });
+  } catch {
+    /* leave raw text on failure */
+  }
 }
 
 createIcons({ icons, nameAttr: 'data-lucide' });
@@ -153,6 +174,7 @@ function restoreTranscript() {
     if (m.role === 'user') appendMessage('user', `<p>${escapeHtml(m.content)}</p>`);
     else appendMessage('assistant', renderMarkdown(m.content));
   }
+  typesetMath(chatBox); // render LaTeX in restored answers
   chatHistory = transcript.slice(-6);
 }
 
@@ -205,6 +227,7 @@ async function streamAnswer(question, handles) {
     } else if (event.type === 'sources') {
       sources = event.sources || [];
     } else if (event.type === 'done') {
+      typesetMath(handles.body); // render LaTeX once the answer is complete
       handles.meta.innerHTML = `<span class="latency">⏱️ Latence: ${event.latency_ms}ms</span>${renderSourcesHTML(sources)}`;
       refreshIcons();
     } else if (event.type === 'error') {
