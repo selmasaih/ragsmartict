@@ -68,3 +68,22 @@ def test_think_filter_split_across_chunks():
 
 def test_think_filter_no_tags():
     assert _run_filter(["hello ", "world"]) == "hello world"
+
+
+def test_strip_echo_passes_normal_answer():
+    ans = "La transformée de Fourier décompose un signal [1]."
+    assert query._strip_echo(ans) == ans
+
+
+def test_strip_echo_removes_leaked_scaffold():
+    leaked = (
+        "Contexte:\n[1] SOURCE: cours.pdf (Page 2)\nblabla\n"
+        "Question: c'est quoi?\nRéponse:\nLa vraie réponse [1]."
+    )
+    assert query._strip_echo(leaked) == "La vraie réponse [1]."
+
+
+def test_strip_echo_never_swallows_without_marker():
+    # Starts with "Contexte" but no "Réponse:" — must not lose content.
+    text = "Contexte historique : ce sujet est important et mérite explication."
+    assert "important" in query._strip_echo(text)
