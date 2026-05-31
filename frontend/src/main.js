@@ -145,37 +145,159 @@ let chatHistory = [];
 let currentController = null;
 let focusedDoc = null; // when set, questions are scoped to this uploaded document
 
-// ── Conversation persistence (survives page refresh) ──────────────────
-const TRANSCRIPT_KEY = 'inpt_transcript';
-let transcript = [];
+// ── Multi-conversation history (localStorage) ─────────────────────────
+const CONV_KEY = 'inpt_conversations';
+let conversations = []; // [{ id, title, messages:[{role,content}], updatedAt }]
+let currentConvId = null;
 
-function saveTranscript() {
+const historyButton = document.getElementById('history-button');
+const historyPanel = document.getElementById('history-panel');
+const historyClose = document.getElementById('history-close');
+const historyList = document.getElementById('history-list');
+const historyNew = document.getElementById('history-new');
+
+function fmtDate(ts) {
+  const d = new Date(ts);
+  const diff = (Date.now() - ts) / 1000;
+  if (diff < 60) return "à l'instant";
+  if (diff < 3600) return `il y a ${Math.floor(diff / 60)} min`;
+  if (diff < 86400) return `il y a ${Math.floor(diff / 3600)} h`;
+  return d.toLocaleDateString('fr-FR', { day: '2-digit', month: 'short' });
+}
+
+function renderHistoryList() {
+  if (!historyList) return;
+  if (conversations.length === 0) {
+    historyList.innerHTML = `<p style="opacity:.6;padding:8px;">Aucune conversation.</p>`;
+    return;
+  }
+  historyList.innerHTML = conversations
+    .map(
+      (c) => `
+      <div class="conv-row ${c.id === currentConvId ? 'active' : ''}" data-id="${c.id}">
+        <div class="conv-meta">
+          <div class="conv-title">${escapeHtml(c.title || 'Conversation')}</div>
+          <div class="conv-date">${fmtDate(c.updatedAt)}</div>
+        </div>
+        <button class="conv-del" data-id="${c.id}" title="Supprimer"><i data-lucide="trash-2"></i></button>
+      </div>`
+    )
+    .join('');
+  refreshIcons();
+  historyList.querySelectorAll('.conv-row').forEach((row) => {
+    row.addEventListener('click', (e) => {
+      if (e.target.closest('.conv-del')) return;
+      openConversation(row.getAttribute('data-id'));
+    });
+  });
+  historyList.querySelectorAll('.conv-del').forEach((btn) => {
+    btn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      deleteConversation(btn.getAttribute('data-id'));
+    });
+  });
+}
+
+if (historyButton) {
+  historyButton.addEventListener('click', () => {
+    if (!historyPanel) return;
+    historyPanel.hidden = !historyPanel.hidden;
+    if (!historyPanel.hidden) renderHistoryList();
+  });
+  if (historyClose) historyClose.addEventListener('click', () => (historyPanel.hidden = true));
+  if (historyNew) historyNew.addEventListener('click', newConversation);
+}
+
+const WELCOME_HTML = `
+  <div class="message assistant-message">
+    <div class="avatar"><i data-lucide="bot"></i></div>
+    <div class="message-content">
+      <p>Bonjour ! Je suis votre assistant pour le cours <strong>Smart ICT</strong>. Posez une question ou importez un document.</p>
+    </div>
+  </div>`;
+
+function genId() {
+  return Date.now().toString(36) + Math.random().toString(36).slice(2, 7);
+}
+
+function loadConversations() {
   try {
-    localStorage.setItem(TRANSCRIPT_KEY, JSON.stringify(transcript.slice(-50)));
+    conversations = JSON.parse(localStorage.getItem(CONV_KEY) || '[]');
   } catch {
-    /* storage full or unavailable — ignore */
+    conversations = [];
+  }
+  if (!Array.isArray(conversations)) conversations = [];
+}
+
+function saveConversations() {
+  try {
+    localStorage.setItem(CONV_KEY, JSON.stringify(conversations.slice(0, 100)));
+  } catch {
+    /* storage unavailable — ignore */
   }
 }
 
-function pushTranscript(role, content) {
-  transcript.push({ role, content });
-  saveTranscript();
+function currentConv() {
+  return conversations.find((c) => c.id === currentConvId) || null;
 }
 
-function restoreTranscript() {
-  try {
-    transcript = JSON.parse(localStorage.getItem(TRANSCRIPT_KEY) || '[]');
-  } catch {
-    transcript = [];
+function pushMessage(role, content) {
+  let c = currentConv();
+  if (!c) {
+    c = { id: genId(), title: 'Nouvelle conversation', messages: [], updatedAt: Date.now() };
+    currentConvId = c.id;
+    conversations.unshift(c);
   }
-  if (!Array.isArray(transcript) || transcript.length === 0) return;
+  c.messages.push({ role, content });
+  if (role === 'user' && c.messages.filter((m) => m.role === 'user').length === 1) {
+    c.title = (content || 'Conversation').slice(0, 48);
+  }
+  c.updatedAt = Date.now();
+  conversations = [c, ...conversations.filter((x) => x.id !== c.id)]; // most recent first
+  saveConversations();
+  renderHistoryList();
+}
+
+function renderConversation(c) {
   chatBox.innerHTML = '';
-  for (const m of transcript) {
-    if (m.role === 'user') appendMessage('user', `<p>${escapeHtml(m.content)}</p>`);
-    else appendMessage('assistant', renderMarkdown(m.content));
+  if (!c || c.messages.length === 0) {
+    chatBox.innerHTML = WELCOME_HTML;
+  } else {
+    for (const m of c.messages) {
+      if (m.role === 'user') appendMessage('user', `<p>${escapeHtml(m.content)}</p>`);
+      else appendMessage('assistant', renderMarkdown(m.content));
+    }
+    typesetMath(chatBox);
   }
-  typesetMath(chatBox); // render LaTeX in restored answers
-  chatHistory = transcript.slice(-6);
+  refreshIcons();
+  chatHistory = c ? c.messages.slice(-6) : [];
+}
+
+function openConversation(id) {
+  if (currentController) currentController.abort();
+  currentConvId = id;
+  setFocusedDoc(null);
+  renderConversation(currentConv());
+  if (historyPanel) historyPanel.hidden = true;
+  renderHistoryList();
+}
+
+function newConversation() {
+  if (currentController) currentController.abort();
+  currentConvId = null; // created lazily on first message
+  chatHistory = [];
+  setFocusedDoc(null);
+  chatBox.innerHTML = WELCOME_HTML;
+  refreshIcons();
+  if (historyPanel) historyPanel.hidden = true;
+  renderHistoryList();
+}
+
+function deleteConversation(id) {
+  conversations = conversations.filter((c) => c.id !== id);
+  saveConversations();
+  if (id === currentConvId) newConversation();
+  else renderHistoryList();
 }
 
 // While sending, the send button becomes a stop button.
@@ -418,7 +540,7 @@ chatForm.addEventListener('submit', async (e) => {
   if (file) bubble += `<p class="attached-line"><i data-lucide="file-text"></i> ${escapeHtml(file.name)}</p>`;
   if (question) bubble += `<p>${escapeHtml(question)}</p>`;
   appendMessage('user', bubble);
-  pushTranscript('user', question || `📎 ${file ? file.name : 'document'}`);
+  pushMessage('user', question || `📎 ${file ? file.name : 'document'}`);
   questionInput.value = '';
   setStagedFile(null);
   setSendingState(true);
@@ -439,7 +561,7 @@ chatForm.addEventListener('submit', async (e) => {
       chatHistory.push({ role: 'user', content: question });
       chatHistory.push({ role: 'assistant', content: answer });
       if (chatHistory.length > 6) chatHistory = chatHistory.slice(chatHistory.length - 6);
-      if (answer) pushTranscript('assistant', answer);
+      if (answer) pushMessage('assistant', answer);
     }
   } catch (error) {
     if (error.name !== 'AbortError') {
@@ -454,23 +576,9 @@ chatForm.addEventListener('submit', async (e) => {
 });
 
 const newChatButton = document.getElementById('new-chat-button');
-if (newChatButton) {
-  newChatButton.addEventListener('click', () => {
-    if (currentController) currentController.abort();
-    chatHistory = [];
-    transcript = [];
-    saveTranscript();
-    setFocusedDoc(null);
-    chatBox.innerHTML = `
-      <div class="message assistant-message">
-        <div class="avatar"><i data-lucide="bot"></i></div>
-        <div class="message-content">
-          <p>Nouvelle conversation. Posez votre question sur les cours Smart ICT.</p>
-        </div>
-      </div>`;
-    refreshIcons();
-  });
-}
+if (newChatButton) newChatButton.addEventListener('click', newConversation);
 
-// Restore any saved conversation on load.
-restoreTranscript();
+// Load saved conversations and open the most recent (or a fresh one).
+loadConversations();
+if (conversations.length > 0) openConversation(conversations[0].id);
+else newConversation();
