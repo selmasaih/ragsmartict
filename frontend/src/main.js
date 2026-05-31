@@ -278,34 +278,49 @@ if (manageButton) {
   docsFilter.addEventListener('input', renderDocs);
 }
 
+// ── Staged attachment: pick a file, keep it as a chip, send with the question ──
+const attachmentChip = document.getElementById('attachment-chip');
+const attachmentName = document.getElementById('attachment-name');
+const attachmentRemove = document.getElementById('attachment-remove');
+let stagedFile = null;
+
+function setStagedFile(file) {
+  stagedFile = file;
+  if (file) {
+    attachmentName.textContent = file.name;
+    attachmentChip.hidden = false;
+    questionInput.placeholder = 'Posez une question sur ce document (optionnel)…';
+  } else {
+    attachmentChip.hidden = true;
+    questionInput.placeholder = "Posez votre question ici (ex: Qu'est-ce que la transformée de Fourier ?)...";
+  }
+  refreshIcons();
+}
+
 if (uploadButton && fileInput) {
   uploadButton.addEventListener('click', () => fileInput.click());
-  fileInput.addEventListener('change', async () => {
+  fileInput.addEventListener('change', () => {
     const file = fileInput.files && fileInput.files[0];
-    if (!file) return;
-    appendMessage('user', `<p>📎 ${escapeHtml(file.name)}</p>`);
-    const handles = createStreamingMessage();
-    handles.body.innerHTML = `<p>Import et indexation en cours…</p>`;
-    setSendingState(true);
-    try {
-      const form = new FormData();
-      form.append('file', file);
-      const res = await fetch(`${API_BASE}/upload`, { method: 'POST', body: form });
-      const data = await res.json();
-      if (res.ok) {
-        handles.body.innerHTML = `<p>✅ <strong>${escapeHtml(data.filename)}</strong> indexé — ${data.chunks_added} extraits ajoutés (domaine : ${escapeHtml(data.topic)}). Vous pouvez maintenant poser des questions dessus.</p>`;
-        fetchStats();
-      } else {
-        handles.body.innerHTML = `<p style="color:#ef4444;">Erreur: ${escapeHtml(data.detail || 'import impossible')}</p>`;
-      }
-    } catch (err) {
-      handles.body.innerHTML = `<p style="color:#ef4444;">Impossible de joindre le serveur pour l'import.</p>`;
-      console.error(err);
-    } finally {
-      setSendingState(false);
-      fileInput.value = '';
-    }
+    if (file) setStagedFile(file);
+    fileInput.value = '';
   });
+  attachmentRemove.addEventListener('click', () => setStagedFile(null));
+}
+
+// Ingest a staged file; returns true on success. Renders progress into `handles`.
+async function ingestStagedFile(file, handles) {
+  handles.body.innerHTML = `<p>📎 Import et indexation de <strong>${escapeHtml(file.name)}</strong>…</p>`;
+  const form = new FormData();
+  form.append('file', file);
+  const res = await fetch(`${API_BASE}/upload`, { method: 'POST', body: form });
+  const data = await res.json();
+  if (!res.ok) {
+    handles.body.innerHTML = `<p style="color:#ef4444;">Erreur d'import: ${escapeHtml(data.detail || 'import impossible')}</p>`;
+    return false;
+  }
+  handles.body.innerHTML = `<p>✅ <strong>${escapeHtml(data.filename)}</strong> indexé — ${data.chunks_added} extraits (domaine : ${escapeHtml(data.topic)}).</p>`;
+  fetchStats();
+  return true;
 }
 
 chatForm.addEventListener('submit', async (e) => {
@@ -318,22 +333,37 @@ chatForm.addEventListener('submit', async (e) => {
   }
 
   const question = questionInput.value.trim();
-  if (!question) return;
+  const file = stagedFile;
+  if (!question && !file) return;
 
-  appendMessage('user', `<p>${escapeHtml(question)}</p>`);
+  // User bubble: show the attachment (if any) and the typed question (if any).
+  let bubble = '';
+  if (file) bubble += `<p class="attached-line"><i data-lucide="file-text"></i> ${escapeHtml(file.name)}</p>`;
+  if (question) bubble += `<p>${escapeHtml(question)}</p>`;
+  appendMessage('user', bubble);
   questionInput.value = '';
+  setStagedFile(null);
   setSendingState(true);
 
-  const handles = createStreamingMessage();
-
   try {
-    const answer = await streamAnswer(question, handles);
-    chatHistory.push({ role: 'user', content: question });
-    chatHistory.push({ role: 'assistant', content: answer });
-    if (chatHistory.length > 6) chatHistory = chatHistory.slice(chatHistory.length - 6);
+    // 1) Ingest the attached file first, if present.
+    if (file) {
+      const upHandles = createStreamingMessage();
+      const ok = await ingestStagedFile(file, upHandles);
+      if (!ok) return;
+    }
+
+    // 2) Answer the question, if one was typed.
+    if (question) {
+      const handles = createStreamingMessage();
+      const answer = await streamAnswer(question, handles);
+      chatHistory.push({ role: 'user', content: question });
+      chatHistory.push({ role: 'assistant', content: answer });
+      if (chatHistory.length > 6) chatHistory = chatHistory.slice(chatHistory.length - 6);
+    }
   } catch (error) {
     if (error.name !== 'AbortError') {
-      handles.body.innerHTML = `<p style="color:#ef4444;">Impossible de se connecter au serveur Backend. Assurez-vous que FastAPI est lancé sur le port 8000.</p>`;
+      appendMessage('assistant', `<p style="color:#ef4444;">Impossible de joindre le serveur Backend.</p>`);
       console.error(error);
     }
   } finally {
