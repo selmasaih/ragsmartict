@@ -25,6 +25,7 @@ from src.config import (
     ENABLE_QUERY_REWRITE, REWRITE_MAX_WORDS,
     BM25_PAGE_SIZE, BM25_MAX_DOCS, MAX_HISTORY_MESSAGES,
     LLM_PROVIDER, GOOGLE_API_KEY, GEMINI_MODEL, STYLE_FEWSHOT,
+    GROQ_API_KEY, GROQ_MODEL, GROQ_API_URL,
 )
 from src.logger import get_logger
 
@@ -316,6 +317,70 @@ def _stream_gemini(prompt: str, system_prompt: str = ""):
             yield text
 
 
+# ── Groq (OpenAI-compatible, free + fast cloud inference) ────────────
+def _groq_messages(prompt: str, system_prompt: str):
+    messages = []
+    if system_prompt:
+        messages.append({"role": "system", "content": system_prompt})
+    messages.append({"role": "user", "content": prompt})
+    return messages
+
+
+def _groq_payload(prompt: str, system_prompt: str, stream: bool):
+    return {
+        "model": GROQ_MODEL,
+        "messages": _groq_messages(prompt, system_prompt),
+        "temperature": OLLAMA_TEMPERATURE,
+        "top_p": OLLAMA_TOP_P,
+        "max_tokens": OLLAMA_NUM_PREDICT,
+        "stream": stream,
+    }
+
+
+def _call_groq(prompt: str, system_prompt: str = "") -> str:
+    headers = {"Authorization": f"Bearer {GROQ_API_KEY}", "Content-Type": "application/json"}
+    resp = requests.post(GROQ_API_URL, json=_groq_payload(prompt, system_prompt, False),
+                         headers=headers, timeout=60)
+    resp.raise_for_status()
+    return resp.json()["choices"][0]["message"]["content"].strip()
+
+
+def _stream_groq(prompt: str, system_prompt: str = ""):
+    headers = {"Authorization": f"Bearer {GROQ_API_KEY}", "Content-Type": "application/json"}
+    with requests.post(GROQ_API_URL, json=_groq_payload(prompt, system_prompt, True),
+                       headers=headers, timeout=60, stream=True) as resp:
+        resp.raise_for_status()
+        for line in resp.iter_lines():
+            if not line:
+                continue
+            data = line.decode("utf-8").removeprefix("data: ").strip()
+            if not data or data == "[DONE]":
+                continue
+            try:
+                delta = json.loads(data)["choices"][0]["delta"].get("content", "")
+            except (json.JSONDecodeError, KeyError, IndexError):
+                continue
+            if delta:
+                yield delta
+
+
+# ── Provider dispatch ────────────────────────────────────────────────
+def _llm_complete(prompt: str, system_prompt: str = "") -> str:
+    if LLM_PROVIDER == "gemini":
+        return _call_gemini(prompt, system_prompt=system_prompt)
+    if LLM_PROVIDER == "groq":
+        return _call_groq(prompt, system_prompt=system_prompt)
+    return _call_ollama(prompt, system_prompt=system_prompt)
+
+
+def _llm_stream(prompt: str, system_prompt: str = ""):
+    if LLM_PROVIDER == "gemini":
+        return _stream_gemini(prompt, system_prompt=system_prompt)
+    if LLM_PROVIDER == "groq":
+        return _stream_groq(prompt, system_prompt=system_prompt)
+    return _stream_ollama(prompt, system_prompt=system_prompt)
+
+
 def _get_reranker():
     global _RERANKER
     if _RERANKER is None:
@@ -338,10 +403,7 @@ def _rewrite_query(question: str) -> str:
             "Tu es un assistant de recherche. Reformule la question en une requete courte et claire, "
             "sans ajouter d'informations. Reponds par une seule ligne, sans guillemets."
         )
-        if LLM_PROVIDER == "gemini":
-            rewritten = _call_gemini(question, system_prompt=system_instruction).strip().splitlines()[0].strip()
-        else:
-            rewritten = _call_ollama(question, system_prompt=system_instruction).strip().splitlines()[0].strip()
+        rewritten = _llm_complete(question, system_prompt=system_instruction).strip().splitlines()[0].strip()
         return rewritten if rewritten else question
     except Exception:
         return question
@@ -592,12 +654,8 @@ def warmup_models():
 
     t = time.time()
     try:
-        if LLM_PROVIDER == "gemini":
-            _call_gemini("ping", system_prompt="Reply with 'pong' only.")
-            log.info("  OK Gemini model warmed (%.1fs)", time.time() - t)
-        else:
-            _call_ollama("ping", system_prompt="Reply with 'pong' only.")
-            log.info("  OK Ollama model warmed (%.1fs)", time.time() - t)
+        _llm_complete("ping", system_prompt="Reply with 'pong' only.")
+        log.info("  OK %s model warmed (%.1fs)", LLM_PROVIDER, time.time() - t)
     except Exception as e:
         log.warning("  LLM warm-up failed: %s", e)
 
@@ -753,10 +811,7 @@ def answer_question(question: str, history: list = None, topic: str = None) -> d
 
     t = time.time()
     try:
-        if LLM_PROVIDER == "gemini":
-            answer = _call_gemini(user_message, system_prompt=system_prompt)
-        else:
-            answer = _call_ollama(user_message, system_prompt=system_prompt)
+        answer = _llm_complete(user_message, system_prompt=system_prompt)
     except Exception as e:
         error_text = str(e)
         if "Connection" in error_text or "ConnectionRefusedError" in error_text:
@@ -821,8 +876,7 @@ def stream_answer(question: str, history: list = None, topic: str = None):
     produced_any = False
     answer_parts = []
     try:
-        generator = _stream_gemini if LLM_PROVIDER == "gemini" else _stream_ollama
-        for piece in generator(user_message, system_prompt=system_prompt):
+        for piece in _llm_stream(user_message, system_prompt=system_prompt):
             produced_any = True
             answer_parts.append(piece)
             yield {"type": "token", "text": piece}
