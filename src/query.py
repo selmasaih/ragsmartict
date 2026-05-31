@@ -146,12 +146,11 @@ _LANG_NAMES = {"fr": "francais", "en": "anglais", "es": "espagnol", "ar": "arabe
 # Short worked example that anchors the desired answer style (structured,
 # scientific, [n] citations, honest "not found"). This is the in-context
 # equivalent of a light style fine-tune — see finetune/Modelfile.inpt.
+# The example shows ONLY the answer (no "Contexte:/Question:" scaffolding) so
+# the model doesn't echo those labels.
 _STYLE_EXEMPLAR = (
-    "\n\nExemple du style attendu :\n"
-    "Contexte:\n[1] SOURCE: cours.pdf (Page 12)\n"
-    "Le théorème d'échantillonnage de Shannon impose fe > 2*fmax.\n"
-    "Question: C'est quoi le théorème de Shannon ?\n"
-    "Réponse:\n"
+    "\n\nExemple d'une bonne réponse (donne directement la réponse, sans répéter "
+    "le contexte ni la question, sans écrire 'Contexte' ou 'SOURCE') :\n"
     "Le théorème d'échantillonnage de Shannon-Nyquist énonce que :\n"
     "- la fréquence d'échantillonnage doit être supérieure au double de la fréquence "
     "maximale du signal (fe > 2·fmax) [1] ;\n"
@@ -232,6 +231,57 @@ def _make_think_filter():
         return out
 
     return feed, flush
+
+
+def _make_echo_filter():
+    """Strip a leaked leading echo of the prompt scaffold ('Contexte: … Réponse:')
+    from a token stream. Safe: if no 'Réponse:' marker shows up within a cap, the
+    buffered text is flushed unchanged so a real answer is never swallowed."""
+    state = {"buf": "", "decided": False, "passthrough": True}
+    CAP = 800
+
+    def feed(text: str = "") -> str:
+        if state["passthrough"] and state["decided"]:
+            return text
+        state["buf"] += text
+        stripped = state["buf"].lstrip().lower()
+        if not state["decided"]:
+            if len(stripped) < 9:
+                return ""  # wait for more to decide
+            if stripped.startswith("contexte"):
+                state["passthrough"] = False
+                state["decided"] = True
+            else:
+                state["decided"] = True
+                state["passthrough"] = True
+                out, state["buf"] = state["buf"], ""
+                return out
+        # In suppression mode: look for the answer marker.
+        low = state["buf"].lower()
+        for marker in ("réponse:", "réponse :", "reponse:", "reponse :"):
+            i = low.find(marker)
+            if i != -1:
+                rest = state["buf"][i + len(marker):]
+                state["buf"] = ""
+                state["passthrough"] = True
+                return rest.lstrip("\n ")
+        if len(state["buf"]) > CAP:  # give up — never lose content
+            out, state["buf"] = state["buf"], ""
+            state["passthrough"] = True
+            return out
+        return ""
+
+    def flush() -> str:
+        out = state["buf"]
+        state["buf"] = ""
+        return out
+
+    return feed, flush
+
+
+def _strip_echo(text: str) -> str:
+    feed, flush = _make_echo_filter()
+    return (feed(text) + flush()).strip()
 
 
 def _strip_think_blocking(raw: str) -> str:
@@ -823,7 +873,7 @@ def answer_question(question: str, history: list = None, topic: str = None, file
 
     t = time.time()
     try:
-        answer = _llm_complete(user_message, system_prompt=system_prompt)
+        answer = _strip_echo(_llm_complete(user_message, system_prompt=system_prompt))
     except Exception as e:
         error_text = str(e)
         if "Connection" in error_text or "ConnectionRefusedError" in error_text:
@@ -887,11 +937,19 @@ def stream_answer(question: str, history: list = None, topic: str = None, filena
 
     produced_any = False
     answer_parts = []
+    echo_feed, echo_flush = _make_echo_filter()
     try:
         for piece in _llm_stream(user_message, system_prompt=system_prompt):
+            visible = echo_feed(piece)
+            if visible:
+                produced_any = True
+                answer_parts.append(visible)
+                yield {"type": "token", "text": visible}
+        tail = echo_flush()
+        if tail:
             produced_any = True
-            answer_parts.append(piece)
-            yield {"type": "token", "text": piece}
+            answer_parts.append(tail)
+            yield {"type": "token", "text": tail}
     except Exception as e:
         error_text = str(e)
         log.warning("Streaming generation failed: %s", error_text)
