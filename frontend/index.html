@@ -1,0 +1,103 @@
+<!DOCTYPE html>
+<html lang="fr">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="description" content="Assistant de révision pour la filière Smart ICT de l'INPT Rabat. Interrogez vos notes de cours et obtenez des réponses sourcées." />
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,400;9..144,500;9..144,600&family=Inter:wght@400;500;600&display=swap" rel="stylesheet" />
+    <link rel="stylesheet" href="/src/landing.css" />
+    <title>INPT Smart ICT — Assistant de révision</title>
+  </head>
+  <body>
+    <nav class="nav">
+      <a class="brand" href="/">
+        <span class="brand-mark">SI</span>
+        <span class="brand-text">INPT&nbsp;·&nbsp;Smart ICT</span>
+      </a>
+      <div class="nav-links">
+        <a href="#features">Fonctionnalités</a>
+        <a href="#method">Méthode</a>
+        <a href="#about">À propos</a>
+        <a class="nav-cta" href="/app.html">Lancer l'assistant</a>
+      </div>
+    </nav>
+
+    <header class="hero">
+      <p class="eyebrow">Assistant de révision · Filière Smart ICT</p>
+      <h1>Vos notes de cours,<br /><em>interrogeables</em> en une phrase.</h1>
+      <p class="lead">
+        Un assistant qui cherche dans l'ensemble de vos polycopiés, TD, examens et supports
+        Smart ICT, puis répond en citant ses sources — page par page, document par document.
+      </p>
+      <div class="hero-actions">
+        <a class="btn btn-primary" href="/app.html">Lancer l'assistant →</a>
+        <a class="btn btn-ghost" href="#features">Découvrir</a>
+      </div>
+      <dl class="hero-stats">
+        <div><dt id="stat-chunks">—</dt><dd>extraits indexés</dd></div>
+        <div><dt>8</dt><dd>domaines couverts</dd></div>
+        <div><dt id="stat-docs">500+</dt><dd>documents</dd></div>
+      </dl>
+    </header>
+
+    <section id="features" class="section">
+      <p class="section-eyebrow">Ce que fait l'assistant</p>
+      <h2 class="section-title">Une recherche pensée pour des notes réelles.</h2>
+      <div class="cards">
+        <article class="card">
+          <h3>Recherche hybride</h3>
+          <p>Recherche sémantique (vectorielle) et lexicale (BM25) combinées, puis re-classement par un cross-encoder pour remonter l'extrait le plus pertinent.</p>
+        </article>
+        <article class="card">
+          <h3>Réponses sourcées</h3>
+          <p>Chaque réponse cite ses extraits avec le nom du document et la page. Aucune affirmation sans source vérifiable dans vos notes.</p>
+        </article>
+        <article class="card">
+          <h3>Import de documents</h3>
+          <p>Ajoutez un PDF ou une photo de notes manuscrites : le fichier est lu, classé par domaine et indexé instantanément, prêt à être interrogé.</p>
+        </article>
+        <article class="card">
+          <h3>Local et confidentiel</h3>
+          <p>Génération possible en local via Ollama : vos notes ne quittent pas votre machine. Le cloud (Gemini) reste optionnel.</p>
+        </article>
+      </div>
+    </section>
+
+    <section id="method" class="section method">
+      <p class="section-eyebrow">Comment ça marche</p>
+      <h2 class="section-title">De la question à la réponse, en trois temps.</h2>
+      <ol class="steps">
+        <li>
+          <span class="step-num">01</span>
+          <h3>Indexation</h3>
+          <p>Vos PDF et images sont découpés, classés dans l'un des 8 domaines Smart ICT et encodés dans une base vectorielle locale.</p>
+        </li>
+        <li>
+          <span class="step-num">02</span>
+          <h3>Récupération</h3>
+          <p>À chaque question, les extraits les plus pertinents sont retrouvés en parallèle (vectoriel + lexical) puis re-classés.</p>
+        </li>
+        <li>
+          <span class="step-num">03</span>
+          <h3>Génération</h3>
+          <p>Le modèle rédige une réponse fondée uniquement sur ces extraits, dans la langue de la question, et affiche les sources.</p>
+        </li>
+      </ol>
+    </section>
+
+    <section id="about" class="section cta-band">
+      <h2>Prêt à réviser autrement ?</h2>
+      <p>Posez votre première question, ou importez un document pour l'enrichir.</p>
+      <a class="btn btn-primary" href="/app.html">Ouvrir l'assistant →</a>
+    </section>
+
+    <footer class="footer">
+      <span>INPT Rabat · Filière Smart ICT</span>
+      <span>Projet RAG — recherche augmentée sur notes de cours</span>
+    </footer>
+
+    <script type="module" src="/src/landing.js"></script>
+  </body>
+</html>
