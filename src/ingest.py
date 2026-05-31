@@ -79,7 +79,9 @@ def process_file(collection, model, text_splitter, path, subject, seen_hashes=No
         meta["topic"] = topic
 
     embeddings = embed_passages(model, all_chunks)
-    collection.add(ids=all_ids, embeddings=embeddings, documents=all_chunks, metadatas=all_metadatas)
+    # upsert (not add) so re-uploading the same file replaces its chunks
+    # instead of raising on duplicate deterministic IDs.
+    collection.upsert(ids=all_ids, embeddings=embeddings, documents=all_chunks, metadatas=all_metadatas)
     return len(all_chunks), topic
 
 
