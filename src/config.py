@@ -48,8 +48,11 @@ LLM_PROVIDER = os.getenv("LLM_PROVIDER", "ollama").lower()
 
 # ── Groq settings (free, fast cloud inference — recommended for deploy) ──
 GROQ_API_KEY = os.getenv("GROQ_API_KEY") or None
-GROQ_MODEL = os.getenv("GROQ_MODEL", "llama-3.1-8b-instant")
+GROQ_MODEL = os.getenv("GROQ_MODEL", "llama-3.3-70b-versatile")
 GROQ_API_URL = "https://api.groq.com/openai/v1/chat/completions"
+# Cloud models are fast — allow long, thorough answers (local Ollama uses
+# OLLAMA_NUM_PREDICT instead, kept small for CPU speed).
+GROQ_MAX_TOKENS = _env_int("GROQ_MAX_TOKENS", 1024)
 
 # ── Ollama settings ──────────────────────────────────────────────────
 OLLAMA_MODEL = os.getenv("OLLAMA_MODEL", "llama3.2:3b")
@@ -72,24 +75,23 @@ EMBEDDING_MODEL = "intfloat/multilingual-e5-small"
 COLLECTION_NAME = "inpt_notes"
 
 # ── Retrieval settings ───────────────────────────────────────────────
-TOP_K = 5
-# Fewer candidates = faster cross-encoder rerank on CPU (the main latency
-# cost once the LLM is on a fast API). ~12 candidates still feed a strong
-# top-5 rerank.
-VECTOR_K = _env_int("VECTOR_K", 8)
-BM25_K = _env_int("BM25_K", 6)
+TOP_K = 6
+# Candidate pool for the cross-encoder rerank. Larger = richer material for
+# the answer (slightly slower CPU rerank).
+VECTOR_K = _env_int("VECTOR_K", 12)
+BM25_K = _env_int("BM25_K", 8)
 ENABLE_RERANK = True
-RERANK_TOP_K = 5
+RERANK_TOP_K = 6
 RERANKER_MODEL = "cross-encoder/mmarco-mMiniLMv2-L12-H384-v1"
 BM25_PAGE_SIZE = 5000
 # Max chunks indexed for lexical (BM25) search. 0 = no cap (index everything).
 BM25_MAX_DOCS = _env_int("BM25_MAX_DOCS", 0)
 
 # ── Context window limits ────────────────────────────────────────────
-# Shorter context = faster CPU prompt processing (lower time-to-first-token).
-CONTEXT_MAX_CHARS = _env_int("CONTEXT_MAX_CHARS", 2400)   # total context to LLM
-CONTEXT_MAX_CHUNK_CHARS = 700     # per-chunk cap
-MAX_CHUNKS_PER_DOC = _env_int("MAX_CHUNKS_PER_DOC", 2)  # diversify sources
+# More context = richer, more thorough answers (cloud LLMs handle it fast).
+CONTEXT_MAX_CHARS = _env_int("CONTEXT_MAX_CHARS", 5000)   # total context to LLM
+CONTEXT_MAX_CHUNK_CHARS = 900     # per-chunk cap
+MAX_CHUNKS_PER_DOC = _env_int("MAX_CHUNKS_PER_DOC", 3)  # diversify sources
 
 # ── Query rewrite (DISABLED — saves a full LLM round-trip) ──────────
 ENABLE_QUERY_REWRITE = _env_bool("ENABLE_QUERY_REWRITE", False)
