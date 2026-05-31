@@ -122,6 +122,7 @@ function createStreamingMessage() {
 
 let chatHistory = [];
 let currentController = null;
+let focusedDoc = null; // when set, questions are scoped to this uploaded document
 
 // While sending, the send button becomes a stop button.
 function setSendingState(sending) {
@@ -143,6 +144,7 @@ async function streamAnswer(question, handles) {
       question,
       history: chatHistory,
       topic: topicSelect && topicSelect.value ? topicSelect.value : null,
+      filename: focusedDoc || null,
     }),
   });
 
@@ -316,12 +318,32 @@ async function ingestStagedFile(file, handles) {
   const data = await res.json();
   if (!res.ok) {
     handles.body.innerHTML = `<p style="color:#ef4444;">Erreur d'import: ${escapeHtml(data.detail || 'import impossible')}</p>`;
-    return false;
+    return null;
   }
-  handles.body.innerHTML = `<p>✅ <strong>${escapeHtml(data.filename)}</strong> indexé — ${data.chunks_added} extraits (domaine : ${escapeHtml(data.topic)}).</p>`;
+  handles.body.innerHTML = `<p>✅ <strong>${escapeHtml(data.filename)}</strong> indexé — ${data.chunks_added} extraits (domaine : ${escapeHtml(data.topic)}). Les questions porteront sur ce document.</p>`;
   fetchStats();
-  return true;
+  return data.filename;
 }
+
+// Active-document focus: scope questions to one uploaded file until cleared.
+const focusBanner = document.getElementById('focus-banner');
+const focusName = document.getElementById('focus-name');
+const focusClear = document.getElementById('focus-clear');
+
+function setFocusedDoc(name) {
+  focusedDoc = name || null;
+  if (!focusBanner) return;
+  if (focusedDoc) {
+    focusName.textContent = focusedDoc;
+    focusBanner.hidden = false;
+    questionInput.placeholder = `Question sur « ${focusedDoc} »…`;
+  } else {
+    focusBanner.hidden = true;
+    questionInput.placeholder = "Posez votre question ici (ex: Qu'est-ce que la transformée de Fourier ?)...";
+  }
+  refreshIcons();
+}
+if (focusClear) focusClear.addEventListener('click', () => setFocusedDoc(null));
 
 chatForm.addEventListener('submit', async (e) => {
   e.preventDefault();
@@ -346,11 +368,12 @@ chatForm.addEventListener('submit', async (e) => {
   setSendingState(true);
 
   try {
-    // 1) Ingest the attached file first, if present.
+    // 1) Ingest the attached file first, if present, and focus questions on it.
     if (file) {
       const upHandles = createStreamingMessage();
-      const ok = await ingestStagedFile(file, upHandles);
-      if (!ok) return;
+      const fname = await ingestStagedFile(file, upHandles);
+      if (!fname) return;
+      setFocusedDoc(fname);
     }
 
     // 2) Answer the question, if one was typed.
@@ -378,6 +401,7 @@ if (newChatButton) {
   newChatButton.addEventListener('click', () => {
     if (currentController) currentController.abort();
     chatHistory = [];
+    setFocusedDoc(null);
     chatBox.innerHTML = `
       <div class="message assistant-message">
         <div class="avatar"><i data-lucide="bot"></i></div>
