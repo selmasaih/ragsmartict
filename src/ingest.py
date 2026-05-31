@@ -45,7 +45,10 @@ def process_file(collection, model, text_splitter, path, subject, seen_hashes=No
     Skips chunks whose exact content was already seen (when seen_hashes is
     provided). Returns (chunks_added, topic)."""
     import hashlib
-    filename = os.path.basename(path)
+    import unicodedata
+    # Normalize to NFC so filenames with accents (é, etc.) match consistently
+    # regardless of the source OS's Unicode normalization (NFC vs NFD).
+    filename = unicodedata.normalize("NFC", os.path.basename(path))
     all_chunks, all_ids, all_metadatas = [], [], []
 
     for page_num, text in extract_any(path):
