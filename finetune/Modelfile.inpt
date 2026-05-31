@@ -6,14 +6,16 @@
 # Build:   ollama create inpt-smart-ict -f finetune/Modelfile.inpt
 # Use:     set OLLAMA_MODEL="inpt-smart-ict" in your .env
 #
-# Swap FROM to any base you have pulled (e.g. qwen2.5:7b, llama3.1:8b).
-FROM llama3.2:3b
+# Base chosen for SPEED on CPU (1B). Swap FROM to a larger model
+# (llama3.2:3b, qwen2.5:7b, …) if you have a GPU or accept higher latency.
+FROM llama3.2:1b
 
-# Decoding tuned for concise, factual, well-structured answers.
+# Decoding tuned for fast, concise, well-structured answers.
 PARAMETER temperature 0.3
 PARAMETER top_p 0.9
 PARAMETER top_k 40
-PARAMETER num_ctx 4096
+PARAMETER num_ctx 2560
+PARAMETER num_predict 220
 PARAMETER repeat_penalty 1.1
 
 SYSTEM """
