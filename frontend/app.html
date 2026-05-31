@@ -25,10 +25,22 @@
           <div class="doc-stats">
             <i data-lucide="database"></i>
             <span id="doc-count">...</span> documents indexés
+            <button id="history-button" title="Historique des conversations"><i data-lucide="history"></i></button>
             <button id="new-chat-button" title="Nouvelle conversation"><i data-lucide="message-square-plus"></i></button>
             <button id="manage-button" title="Gérer les documents"><i data-lucide="folder-cog"></i></button>
           </div>
         </header>
+
+        <div id="history-panel" class="docs-panel glass" hidden>
+          <div class="docs-panel-header">
+            <strong>Conversations</strong>
+            <div style="display:flex;gap:6px;">
+              <button id="history-new" title="Nouvelle conversation"><i data-lucide="plus"></i></button>
+              <button id="history-close" title="Fermer"><i data-lucide="x"></i></button>
+            </div>
+          </div>
+          <div id="history-list" class="docs-list"></div>
+        </div>
 
         <div id="docs-panel" class="docs-panel glass" hidden>
           <div class="docs-panel-header">
