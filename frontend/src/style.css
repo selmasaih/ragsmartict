@@ -144,6 +144,16 @@ body {
   filter: drop-shadow(0 0 8px var(--primary-glow));
 }
 
+.home-link {
+  display: inline-flex;
+  align-items: center;
+  color: var(--text-muted);
+  -webkit-text-fill-color: var(--text-muted);
+  transition: color 0.15s, transform 0.15s;
+}
+.home-link:hover { color: var(--primary); -webkit-text-fill-color: var(--primary); transform: translateX(-2px); }
+.home-link svg { width: 20px; height: 20px; filter: none; }
+
 .subtitle {
   font-size: 0.95rem;
   color: var(--text-muted);
@@ -394,6 +404,34 @@ body {
 }
 #upload-button:hover { background: rgba(99, 102, 241, 0.25); }
 #upload-button svg { width: 19px; height: 19px; }
+
+.attachment-chip {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 0 0 0.75rem 0.5rem;
+  padding: 0.4rem 0.6rem 0.4rem 0.75rem;
+  width: fit-content;
+  max-width: 100%;
+  background: rgba(99, 102, 241, 0.15);
+  border: 1px solid rgba(99, 102, 241, 0.35);
+  border-radius: 0.6rem;
+  font-size: 0.85rem;
+}
+.attachment-chip[hidden] { display: none; }
+.attachment-chip svg { width: 16px; height: 16px; color: var(--primary); flex-shrink: 0; }
+.attachment-chip span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 320px; }
+.attachment-chip button { background: transparent; border: none; color: var(--text-main); cursor: pointer; opacity: 0.7; display: inline-flex; }
+.attachment-chip button:hover { opacity: 1; }
+
+.attached-line {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  opacity: 0.85;
+  font-size: 0.85rem;
+}
+.attached-line svg { width: 15px; height: 15px; }
 
 #manage-button, #new-chat-button {
   background: transparent;
