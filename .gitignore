@@ -11,3 +11,5 @@ node_modules/
 frontend/dist/
 .pytest_cache/
 bm25_cache.pkl
+finetune/style_dataset.jsonl
+finetune/*.gguf
