@@ -40,10 +40,11 @@ def embed_passages(model, chunks):
     return model.encode([PASSAGE_PREFIX + c for c in chunks], normalize_embeddings=True).tolist()
 
 
-def process_file(collection, model, text_splitter, path, subject, seen_hashes=None):
+def process_file(collection, model, text_splitter, path, subject, seen_hashes=None, extra_meta=None):
     """Extract, chunk, classify, embed and add one file to the collection.
     Skips chunks whose exact content was already seen (when seen_hashes is
-    provided). Returns (chunks_added, topic)."""
+    provided). `extra_meta` adds fields to every chunk's metadata (e.g. session,
+    uploaded_at for uploads). Returns (chunks_added, topic)."""
     import hashlib
     import unicodedata
     # Normalize to NFC so filenames with accents (é, etc.) match consistently
@@ -77,6 +78,8 @@ def process_file(collection, model, text_splitter, path, subject, seen_hashes=No
     topic = classify(filename, subject, sample, model=model)
     for meta in all_metadatas:
         meta["topic"] = topic
+        if extra_meta:
+            meta.update(extra_meta)
 
     embeddings = embed_passages(model, all_chunks)
     # upsert (not add) so re-uploading the same file replaces its chunks
