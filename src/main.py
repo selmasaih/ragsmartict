@@ -63,6 +63,7 @@ class QueryRequest(BaseModel):
     question: str = Field(..., min_length=1)
     history: Optional[List[Dict[str, Any]]] = []
     topic: Optional[str] = None
+    filename: Optional[str] = None  # scope retrieval to one uploaded document
 
 
 class DeleteRequest(BaseModel):
@@ -132,8 +133,9 @@ async def upload_file(request: Request, file: UploadFile = File(...)):
             detail=f"Type de fichier non supporté ({ext}). Formats acceptés : PDF, images.",
         )
 
+    import unicodedata
     os.makedirs(UPLOAD_DIR, exist_ok=True)
-    safe_name = os.path.basename(file.filename)
+    safe_name = unicodedata.normalize("NFC", os.path.basename(file.filename))
     dest = os.path.join(UPLOAD_DIR, safe_name)
 
     size = 0
@@ -169,7 +171,7 @@ async def upload_file(request: Request, file: UploadFile = File(...)):
 @limiter.limit(RATE_LIMIT)
 def query_rag(request: Request, body: QueryRequest):
     question = _validate_question(body)
-    result = answer_question(question, history=body.history, topic=body.topic)
+    result = answer_question(question, history=body.history, topic=body.topic, filename=body.filename)
     if "error" in result:
         raise HTTPException(status_code=500, detail=result["error"])
     return result
@@ -181,7 +183,7 @@ def query_rag_stream(request: Request, body: QueryRequest):
     question = _validate_question(body)
 
     def event_stream():
-        for event in stream_answer(question, history=body.history, topic=body.topic):
+        for event in stream_answer(question, history=body.history, topic=body.topic, filename=body.filename):
             yield f"data: {json.dumps(event, ensure_ascii=False)}\n\n"
 
     return StreamingResponse(
