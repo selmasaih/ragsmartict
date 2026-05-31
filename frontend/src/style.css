@@ -366,6 +366,26 @@ body {
 #upload-button:hover { background: var(--primary-soft); color: var(--primary); border-color: var(--primary); }
 #upload-button svg { width: 19px; height: 19px; }
 
+.focus-banner {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 0 0 0.75rem 0.5rem;
+  padding: 0.4rem 0.6rem 0.4rem 0.75rem;
+  width: fit-content;
+  max-width: 100%;
+  background: var(--primary-soft);
+  border: 1px solid rgba(29, 78, 216, 0.3);
+  border-radius: 0.6rem;
+  font-size: 0.85rem;
+  color: var(--ink);
+}
+.focus-banner[hidden] { display: none; }
+.focus-banner svg { width: 16px; height: 16px; color: var(--primary); flex-shrink: 0; }
+.focus-banner strong { word-break: break-word; }
+.focus-banner button { background: transparent; border: none; color: var(--muted); cursor: pointer; opacity: 0.8; display: inline-flex; }
+.focus-banner button:hover { opacity: 1; color: var(--ink); }
+
 .attachment-chip {
   display: flex;
   align-items: center;
