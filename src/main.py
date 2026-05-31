@@ -15,12 +15,13 @@ from slowapi import _rate_limit_exceeded_handler
 
 from src.query import (
     answer_question, stream_answer, warmup_models, list_topics,
-    add_file_to_index, list_documents, delete_document,
+    add_file_to_index, list_documents, delete_document, purge_expired_uploads,
 )
 from src.extract import IMAGE_EXTS, ocr_available
 from src.config import (
     CHROMA_DB_PATH, COLLECTION_NAME, CORS_ORIGINS, MAX_QUESTION_CHARS,
-    LLM_PROVIDER, NOTES_PATH, API_KEY, RATE_LIMIT, validate,
+    LLM_PROVIDER, NOTES_PATH, API_KEY, RATE_LIMIT, GROQ_API_KEY, GOOGLE_API_KEY,
+    validate,
 )
 from src.logger import get_logger
 
@@ -28,8 +29,26 @@ UPLOAD_DIR = os.path.join(NOTES_PATH, "_uploads")
 ALLOWED_UPLOAD_EXTS = {".pdf"} | IMAGE_EXTS
 MAX_UPLOAD_BYTES = 25 * 1024 * 1024
 
+
+def _client_ip(request: Request) -> str:
+    """Real client IP for rate limiting, honoring the proxy's X-Forwarded-For
+    (the hosting platform's load balancer) instead of the proxy's own IP."""
+    fwd = request.headers.get("x-forwarded-for")
+    if fwd:
+        return fwd.split(",")[0].strip()
+    return get_remote_address(request)
+
+
 log = get_logger("rag.api")
-limiter = Limiter(key_func=get_remote_address)
+limiter = Limiter(key_func=_client_ip)
+
+
+def _llm_configured() -> bool:
+    if LLM_PROVIDER == "groq":
+        return bool(GROQ_API_KEY)
+    if LLM_PROVIDER == "gemini":
+        return bool(GOOGLE_API_KEY)
+    return True  # ollama: local, assumed reachable
 
 
 def require_api_key(x_api_key: Optional[str] = Header(default=None)):
@@ -42,6 +61,7 @@ def require_api_key(x_api_key: Optional[str] = Header(default=None)):
 async def lifespan(app: FastAPI):
     for problem in validate():
         log.warning("Config: %s", problem)
+    purge_expired_uploads()  # drop stale private uploads
     warmup_models()
     yield
 
@@ -64,6 +84,7 @@ class QueryRequest(BaseModel):
     history: Optional[List[Dict[str, Any]]] = []
     topic: Optional[str] = None
     filename: Optional[str] = None  # scope retrieval to one uploaded document
+    session: Optional[str] = None   # owner of private uploads
 
 
 class DeleteRequest(BaseModel):
@@ -92,7 +113,15 @@ def health():
     except Exception:
         count = 0
         status = "no_collection"
-    return {"status": status, "doc_count": count, "llm_provider": LLM_PROVIDER}
+    llm_ok = _llm_configured()
+    if not llm_ok:
+        status = "llm_unconfigured"
+    return {
+        "status": status,
+        "doc_count": count,
+        "llm_provider": LLM_PROVIDER,
+        "llm_configured": llm_ok,
+    }
 
 
 @app.get("/api/stats")
@@ -125,7 +154,8 @@ def remove_document(request: DeleteRequest):
 
 @app.post("/api/upload", dependencies=[Depends(require_api_key)])
 @limiter.limit(RATE_LIMIT)
-async def upload_file(request: Request, file: UploadFile = File(...)):
+async def upload_file(request: Request, file: UploadFile = File(...),
+                      x_session_id: Optional[str] = Header(default=None)):
     ext = os.path.splitext(file.filename or "")[1].lower()
     if ext not in ALLOWED_UPLOAD_EXTS:
         raise HTTPException(
@@ -149,7 +179,7 @@ async def upload_file(request: Request, file: UploadFile = File(...)):
             out.write(chunk)
 
     try:
-        n, topic = add_file_to_index(dest, subject="Uploads")
+        n, topic = add_file_to_index(dest, session=x_session_id)
     except Exception as e:
         log.error("Upload ingestion failed for %s: %s", safe_name, e)
         raise HTTPException(status_code=500, detail=f"Échec de l'indexation : {e}")
@@ -171,7 +201,8 @@ async def upload_file(request: Request, file: UploadFile = File(...)):
 @limiter.limit(RATE_LIMIT)
 def query_rag(request: Request, body: QueryRequest):
     question = _validate_question(body)
-    result = answer_question(question, history=body.history, topic=body.topic, filename=body.filename)
+    result = answer_question(question, history=body.history, topic=body.topic,
+                             filename=body.filename, session=body.session)
     if "error" in result:
         raise HTTPException(status_code=500, detail=result["error"])
     return result
@@ -183,7 +214,8 @@ def query_rag_stream(request: Request, body: QueryRequest):
     question = _validate_question(body)
 
     def event_stream():
-        for event in stream_answer(question, history=body.history, topic=body.topic, filename=body.filename):
+        for event in stream_answer(question, history=body.history, topic=body.topic,
+                                   filename=body.filename, session=body.session):
             yield f"data: {json.dumps(event, ensure_ascii=False)}\n\n"
 
     return StreamingResponse(
