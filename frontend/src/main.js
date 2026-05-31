@@ -34,6 +34,17 @@ createIcons({ icons, nameAttr: 'data-lucide' });
 
 const API_BASE = import.meta.env.VITE_API_BASE || 'http://127.0.0.1:8000/api';
 
+// Stable per-browser session id so uploaded documents stay private to this user.
+function getSessionId() {
+  let sid = localStorage.getItem('inpt_session');
+  if (!sid) {
+    sid = (crypto.randomUUID && crypto.randomUUID()) || Date.now().toString(36) + Math.random().toString(36).slice(2);
+    localStorage.setItem('inpt_session', sid);
+  }
+  return sid;
+}
+const SESSION_ID = getSessionId();
+
 const chatBox = document.getElementById('chat-box');
 const chatForm = document.getElementById('chat-form');
 const questionInput = document.getElementById('question-input');
@@ -321,6 +332,7 @@ async function streamAnswer(question, handles) {
       history: chatHistory,
       topic: topicSelect && topicSelect.value ? topicSelect.value : null,
       filename: focusedDoc || null,
+      session: SESSION_ID,
     }),
   });
 
@@ -491,7 +503,11 @@ async function ingestStagedFile(file, handles) {
   handles.body.innerHTML = `<p>📎 Import et indexation de <strong>${escapeHtml(file.name)}</strong>…</p>`;
   const form = new FormData();
   form.append('file', file);
-  const res = await fetch(`${API_BASE}/upload`, { method: 'POST', body: form });
+  const res = await fetch(`${API_BASE}/upload`, {
+    method: 'POST',
+    headers: { 'X-Session-Id': SESSION_ID },
+    body: form,
+  });
   const data = await res.json();
   if (!res.ok) {
     handles.body.innerHTML = `<p style="color:#ef4444;">Erreur d'import: ${escapeHtml(data.detail || 'import impossible')}</p>`;
