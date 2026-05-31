@@ -24,7 +24,7 @@ from src.config import (
     VECTOR_K, BM25_K, RERANK_TOP_K, RERANKER_MODEL, ENABLE_RERANK,
     ENABLE_QUERY_REWRITE, REWRITE_MAX_WORDS,
     BM25_PAGE_SIZE, BM25_MAX_DOCS, MAX_HISTORY_MESSAGES,
-    LLM_PROVIDER, GOOGLE_API_KEY, GEMINI_MODEL,
+    LLM_PROVIDER, GOOGLE_API_KEY, GEMINI_MODEL, STYLE_FEWSHOT,
 )
 from src.logger import get_logger
 
@@ -142,6 +142,25 @@ def _make_candidate_id(meta, fallback: str) -> str:
 
 _LANG_NAMES = {"fr": "francais", "en": "anglais", "es": "espagnol", "ar": "arabe", "de": "allemand"}
 
+# Short worked example that anchors the desired answer style (structured,
+# scientific, [n] citations, honest "not found"). This is the in-context
+# equivalent of a light style fine-tune — see finetune/Modelfile.inpt.
+_STYLE_EXEMPLAR = (
+    "\n\nExemple du style attendu :\n"
+    "Contexte:\n[1] SOURCE: cours.pdf (Page 12)\n"
+    "Le théorème d'échantillonnage de Shannon impose fe > 2*fmax.\n"
+    "Question: C'est quoi le théorème de Shannon ?\n"
+    "Réponse:\n"
+    "Le théorème d'échantillonnage de Shannon-Nyquist énonce que :\n"
+    "- la fréquence d'échantillonnage doit être supérieure au double de la fréquence "
+    "maximale du signal (fe > 2·fmax) [1] ;\n"
+    "- en deçà de cette limite, un repliement spectral (aliasing) dégrade le signal.\n"
+)
+
+
+def _build_few_shot() -> str:
+    return _STYLE_EXEMPLAR if STYLE_FEWSHOT else ""
+
 
 def _detect_language(text: str) -> str:
     """Best-effort language code of the question; defaults to French."""
@@ -166,6 +185,7 @@ def _build_system_prompt(lang: str = "fr"):
         f"Reponds en {lang_name} (la langue de la question) et UNIQUEMENT avec les extraits fournis. "
         "Chaque extrait est numerote [1], [2], etc. Cite la source pertinente en fin de phrase "
         "avec son numero entre crochets (ex: ...selon la definition [2].). N'invente pas de numeros."
+        + _build_few_shot()
     )
 
 
