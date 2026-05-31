@@ -25,7 +25,7 @@ from src.config import (
     ENABLE_QUERY_REWRITE, REWRITE_MAX_WORDS,
     BM25_PAGE_SIZE, BM25_MAX_DOCS, MAX_HISTORY_MESSAGES,
     LLM_PROVIDER, GOOGLE_API_KEY, GEMINI_MODEL, STYLE_FEWSHOT,
-    GROQ_API_KEY, GROQ_MODEL, GROQ_API_URL,
+    GROQ_API_KEY, GROQ_MODEL, GROQ_API_URL, GROQ_MAX_TOKENS,
 )
 from src.logger import get_logger
 
@@ -149,12 +149,17 @@ _LANG_NAMES = {"fr": "francais", "en": "anglais", "es": "espagnol", "ar": "arabe
 # The example shows ONLY the answer (no "Contexte:/Question:" scaffolding) so
 # the model doesn't echo those labels.
 _STYLE_EXEMPLAR = (
-    "\n\nExemple d'une bonne réponse (donne directement la réponse, sans répéter "
-    "le contexte ni la question, sans écrire 'Contexte' ou 'SOURCE') :\n"
-    "Le théorème d'échantillonnage de Shannon-Nyquist énonce que :\n"
-    "- la fréquence d'échantillonnage doit être supérieure au double de la fréquence "
-    "maximale du signal (fe > 2·fmax) [1] ;\n"
-    "- en deçà de cette limite, un repliement spectral (aliasing) dégrade le signal.\n"
+    "\n\nExemple du niveau de qualité attendu (réponds directement, sans écrire "
+    "'Contexte' ni 'SOURCE') :\n"
+    "Le **théorème d'échantillonnage de Shannon-Nyquist** fixe la condition pour "
+    "numériser un signal sans perte d'information.\n\n"
+    "**Énoncé.** La fréquence d'échantillonnage doit être supérieure au double de la "
+    "fréquence maximale du signal : **fe > 2·fmax** [1].\n\n"
+    "**Intuition.** En pratique, si on échantillonne trop lentement, des fréquences "
+    "élevées se font passer pour des basses fréquences : c'est le **repliement spectral "
+    "(aliasing)**, qui déforme le signal de façon irréversible [1].\n\n"
+    "**Exemple.** Pour un signal audio dont fmax = 20 kHz, il faut fe > 40 kHz — d'où le "
+    "standard de 44,1 kHz du CD."
 )
 
 
@@ -176,15 +181,24 @@ def _detect_language(text: str) -> str:
 def _build_system_prompt(lang: str = "fr"):
     lang_name = _LANG_NAMES.get(lang, "francais")
     return (
-        "Tu es un assistant expert pour un etudiant ingenieur a INPT Rabat (filiere Smart ICT). "
-        "Adopte un ton professionnel, précis et scientifique. "
-        "Structure la reponse en paragraphes courts ou listes à puces. "
-        "REVISE TES SOURCES : Avant de repondre, verifie si les informations sont coherentes. "
-        "Si deux extraits semblent se contredire (ex: differentes annees ou matieres), precise-le. "
-        "NE HALUCINE PAS : Si l'information exacte n'est pas dans les extraits, dis 'Information non trouvee'. "
-        f"Reponds en {lang_name} (la langue de la question) et UNIQUEMENT avec les extraits fournis. "
-        "Chaque extrait est numerote [1], [2], etc. Cite la source pertinente en fin de phrase "
-        "avec son numero entre crochets (ex: ...selon la definition [2].). N'invente pas de numeros."
+        "Tu es un excellent professeur particulier pour un étudiant ingénieur à l'INPT Rabat "
+        "(filière Smart ICT). Ton objectif : faire VRAIMENT comprendre, comme le ferait un grand "
+        "assistant pédagogique. "
+        f"Réponds en {lang_name} (la langue de la question), en Markdown clair et structuré.\n"
+        "Structure attendue :\n"
+        "1. Commence par une définition / phrase de cadrage simple et directe.\n"
+        "2. Développe en paragraphes courts et listes à puces ; mets en **gras** les termes clés.\n"
+        "3. Ajoute une intuition (« en pratique… ») et, si pertinent, un exemple concret ou une formule.\n"
+        "4. Si utile, termine par une courte synthèse ou un point d'attention.\n"
+        "Sois complet et pédagogique, mais précis et sans remplissage inutile.\n"
+        "RÈGLES STRICTES :\n"
+        "- Fonde-toi UNIQUEMENT sur les extraits fournis ; n'invente aucun fait.\n"
+        "- Si l'information n'est pas dans les extraits, dis-le clairement (« Information non trouvée "
+        "dans les documents ») au lieu d'inventer.\n"
+        "- Si deux extraits se contredisent (années/matières différentes), signale-le.\n"
+        "- Les extraits sont numérotés [1], [2]… : cite la source pertinente en fin de phrase entre "
+        "crochets (ex : …selon la définition [2].). N'invente jamais de numéro.\n"
+        "- Donne directement la réponse, sans répéter le contexte ni la question."
         + _build_few_shot()
     )
 
@@ -382,7 +396,7 @@ def _groq_payload(prompt: str, system_prompt: str, stream: bool):
         "messages": _groq_messages(prompt, system_prompt),
         "temperature": OLLAMA_TEMPERATURE,
         "top_p": OLLAMA_TOP_P,
-        "max_tokens": OLLAMA_NUM_PREDICT,
+        "max_tokens": GROQ_MAX_TOKENS,
         "stream": stream,
     }
 
