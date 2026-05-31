@@ -85,6 +85,12 @@ MAX_CHUNKS_PER_DOC = _env_int("MAX_CHUNKS_PER_DOC", 2)  # diversify sources
 ENABLE_QUERY_REWRITE = _env_bool("ENABLE_QUERY_REWRITE", False)
 REWRITE_MAX_WORDS = 10
 
+# ── Style specialization (lightweight "style fine-tune" without training) ──
+# Injects a short worked example into the system prompt to anchor the answer
+# style (structure, scientific tone, [n] citations). Pairs with the Ollama
+# Modelfile in finetune/.
+STYLE_FEWSHOT = _env_bool("STYLE_FEWSHOT", True)
+
 
 def validate() -> list[str]:
     """Return a list of human-readable configuration problems (empty if OK)."""
