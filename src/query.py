@@ -579,7 +579,7 @@ def _collect_vector_candidates(results):
     return candidates
 
 
-def _collect_bm25_candidates(collection, query_text: str, topic: str = None):
+def _collect_bm25_candidates(collection, query_text: str, topic: str = None, filename: str = None):
     try:
         index = _get_bm25_index(collection)
     except Exception:
@@ -592,6 +592,8 @@ def _collect_bm25_candidates(collection, query_text: str, topic: str = None):
     for idx in order:
         meta = _BM25_METAS[idx]
         if topic and (meta or {}).get("topic") != topic:
+            continue
+        if filename and (meta or {}).get("filename") != filename:
             continue
         doc_id = _make_candidate_id(meta, f"bm25_{idx}")
         candidates.append({"id": doc_id, "doc": _BM25_DOCS[idx], "meta": meta, "score": scores[idx]})
@@ -682,8 +684,9 @@ def _ensure_collection_ready():
     return collection, None
 
 
-def _retrieve(collection, question: str, topic: str = None):
-    """Run the full retrieval pipeline. Returns (context_str, sources, retrieved_chunks, timings)."""
+def _retrieve(collection, question: str, topic: str = None, filename: str = None):
+    """Run the full retrieval pipeline. Returns (context_str, sources, retrieved_chunks, timings).
+    When `filename` is set, retrieval is scoped to that single document."""
     timings = {}
 
     t = time.time()
@@ -696,7 +699,15 @@ def _retrieve(collection, question: str, topic: str = None):
 
     t = time.time()
     import concurrent.futures
-    where = {"topic": topic} if topic else None
+    import unicodedata
+    if filename:
+        filename = unicodedata.normalize("NFC", filename)
+    conds = []
+    if topic:
+        conds.append({"topic": topic})
+    if filename:
+        conds.append({"filename": filename})
+    where = None if not conds else (conds[0] if len(conds) == 1 else {"$and": conds})
     with concurrent.futures.ThreadPoolExecutor(max_workers=2) as executor:
         def fetch_vector():
             res = collection.query(
@@ -709,7 +720,7 @@ def _retrieve(collection, question: str, topic: str = None):
 
         def fetch_bm25():
             if BM25_K > 0:
-                return _collect_bm25_candidates(collection, query_text, topic=topic)
+                return _collect_bm25_candidates(collection, query_text, topic=topic, filename=filename)
             return []
 
         future_vector = executor.submit(fetch_vector)
@@ -784,7 +795,7 @@ def _build_user_message(context_str: str, history: list, question: str) -> str:
     return f"{history_str}Contexte:\n{context_str}\n\nQuestion: {question}"
 
 
-def answer_question(question: str, history: list = None, topic: str = None) -> dict:
+def answer_question(question: str, history: list = None, topic: str = None, filename: str = None) -> dict:
     """Non-streaming RAG answer."""
     start_time = time.time()
     history = history or []
@@ -793,13 +804,14 @@ def answer_question(question: str, history: list = None, topic: str = None) -> d
     if err:
         return err
 
-    cache_key = _answer_cache_key(question, topic) if not history else None
+    # Don't cache document-scoped questions (filename-specific).
+    cache_key = _answer_cache_key(question, topic) if (not history and not filename) else None
     if cache_key:
         cached = _answer_cache_get(cache_key)
         if cached:
             return {**cached, "latency_ms": int((time.time() - start_time) * 1000), "cached": True}
 
-    context_str, sources, retrieved_chunks, timings = _retrieve(collection, question, topic)
+    context_str, sources, retrieved_chunks, timings = _retrieve(collection, question, topic, filename)
     if not retrieved_chunks:
         return {
             "answer": "Aucun document pertinent trouvé dans la base de données.",
@@ -836,7 +848,7 @@ def answer_question(question: str, history: list = None, topic: str = None) -> d
     return {"answer": answer, "sources": sources, "latency_ms": latency_ms, "timings": timings}
 
 
-def stream_answer(question: str, history: list = None, topic: str = None):
+def stream_answer(question: str, history: list = None, topic: str = None, filename: str = None):
     """Generator yielding event dicts for SSE:
        {"type": "token", "text": ...}
        {"type": "sources", "sources": [...]}
@@ -851,7 +863,7 @@ def stream_answer(question: str, history: list = None, topic: str = None):
         yield {"type": "error", "error": err["error"]}
         return
 
-    cache_key = _answer_cache_key(question, topic) if not history else None
+    cache_key = _answer_cache_key(question, topic) if (not history and not filename) else None
     if cache_key:
         cached = _answer_cache_get(cache_key)
         if cached:
@@ -860,7 +872,7 @@ def stream_answer(question: str, history: list = None, topic: str = None):
             yield {"type": "done", "latency_ms": int((time.time() - start_time) * 1000), "cached": True}
             return
 
-    context_str, sources, retrieved_chunks, timings = _retrieve(collection, question, topic)
+    context_str, sources, retrieved_chunks, timings = _retrieve(collection, question, topic, filename)
     if not retrieved_chunks:
         yield {"type": "sources", "sources": []}
         yield {"type": "token", "text": "Aucun document pertinent trouvé dans la base de données."}
