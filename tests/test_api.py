@@ -45,11 +45,45 @@ def test_query_too_long_rejected(client, monkeypatch):
 def test_query_happy_path(client, monkeypatch):
     monkeypatch.setattr(
         main, "answer_question",
-        lambda q, history=None, topic=None, filename=None: {"answer": "ok", "sources": [], "latency_ms": 1},
+        lambda q, history=None, topic=None, filename=None, session=None:
+            {"answer": "ok", "sources": [], "latency_ms": 1},
     )
     res = client.post("/api/query", json={"question": "Bonjour ?"})
     assert res.status_code == 200
     assert res.json()["answer"] == "ok"
+
+
+def test_query_passes_session_and_filename(client, monkeypatch):
+    seen = {}
+
+    def fake(q, history=None, topic=None, filename=None, session=None):
+        seen["filename"] = filename
+        seen["session"] = session
+        return {"answer": "ok", "sources": [], "latency_ms": 1}
+
+    monkeypatch.setattr(main, "answer_question", fake)
+    client.post("/api/query", json={"question": "q", "filename": "x.pdf", "session": "sess1"})
+    assert seen == {"filename": "x.pdf", "session": "sess1"}
+
+
+def test_query_stream_emits_sse(client, monkeypatch):
+    def fake_stream(q, history=None, topic=None, filename=None, session=None):
+        yield {"type": "sources", "sources": []}
+        yield {"type": "token", "text": "Bonjour"}
+        yield {"type": "done", "latency_ms": 5}
+
+    monkeypatch.setattr(main, "stream_answer", fake_stream)
+    res = client.post("/api/query/stream", json={"question": "salut"})
+    assert res.status_code == 200
+    body = res.text
+    assert "data:" in body
+    assert '"type": "token"' in body
+    assert "Bonjour" in body
+
+
+def test_health_reports_llm_configured(client):
+    res = client.get("/api/health")
+    assert "llm_configured" in res.json()
 
 
 def test_documents_list(client, monkeypatch):
