@@ -38,6 +38,13 @@ LOG_LEVEL = os.getenv("LOG_LEVEL", "INFO").upper()
 CORS_ORIGINS = _env_list("CORS_ORIGINS", "http://localhost:5173,http://127.0.0.1:5173")
 MAX_QUESTION_CHARS = _env_int("MAX_QUESTION_CHARS", 2000)
 MAX_HISTORY_MESSAGES = _env_int("MAX_HISTORY_MESSAGES", 6)
+
+# ── Uploads (multi-tenant safety) ────────────────────────────────────
+# Uploaded docs are tagged with this subject, kept OUT of the shared global
+# search, and only retrievable by their owner's session. They expire after
+# UPLOAD_TTL_HOURS to avoid unbounded growth of the shared DB.
+UPLOAD_SUBJECT = "Uploads"
+UPLOAD_TTL_HOURS = _env_int("UPLOAD_TTL_HOURS", 24)
 # Optional API key: when set, mutating endpoints require header X-API-Key.
 API_KEY = os.getenv("API_KEY") or None
 # Per-client rate limit for query/upload endpoints (slowapi syntax).
@@ -49,6 +56,9 @@ LLM_PROVIDER = os.getenv("LLM_PROVIDER", "ollama").lower()
 # ── Groq settings (free, fast cloud inference — recommended for deploy) ──
 GROQ_API_KEY = os.getenv("GROQ_API_KEY") or None
 GROQ_MODEL = os.getenv("GROQ_MODEL", "llama-3.3-70b-versatile")
+# Smaller model used automatically when the primary hits a rate limit (429)
+# or errors — keeps the app responsive instead of failing outright.
+GROQ_FALLBACK_MODEL = os.getenv("GROQ_FALLBACK_MODEL", "llama-3.1-8b-instant")
 GROQ_API_URL = "https://api.groq.com/openai/v1/chat/completions"
 # Cloud models are fast — allow long, thorough answers (local Ollama uses
 # OLLAMA_NUM_PREDICT instead, kept small for CPU speed).
@@ -80,7 +90,9 @@ TOP_K = 6
 # the answer (slightly slower CPU rerank).
 VECTOR_K = _env_int("VECTOR_K", 12)
 BM25_K = _env_int("BM25_K", 8)
-ENABLE_RERANK = True
+# Set ENABLE_RERANK=false on memory-constrained hosts (the cross-encoder adds
+# ~400 MB RAM + CPU latency); retrieval still works via vector+BM25 scores.
+ENABLE_RERANK = _env_bool("ENABLE_RERANK", True)
 RERANK_TOP_K = 6
 RERANKER_MODEL = "cross-encoder/mmarco-mMiniLMv2-L12-H384-v1"
 BM25_PAGE_SIZE = 5000
