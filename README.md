@@ -15,6 +15,7 @@ Assistant virtuel basé sur une architecture RAG (Retrieval-Augmented Generation
 - 🔒 **API durcie** — CORS configurable, validation des entrées, clé API optionnelle, rate limiting, `/api/health`, logs structurés.
 - 🧪 **Testé + CI** — tests unitaires (helpers) et API (TestClient) ; GitHub Actions lance lint + tests + build frontend.
 - 📊 **Harnais d'évaluation** — `scripts/eval_retrieval.py` mesure hit@k / MRR sur un jeu de questions labellisées.
+- 🎨 **Spécialisation du style** — RAG + léger « style fine-tune » : Modelfile Ollama (sans GPU) et pipeline LoRA optionnel (`finetune/`).
 
 ## 🏗️ Architecture
 
