@@ -6,7 +6,7 @@
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
-    <title>INPT Smart ICT RAG</title>
+    <title>Assistant — INPT Smart ICT</title>
   </head>
   <body>
     <div id="app">
@@ -19,7 +19,7 @@
       <main class="chat-container">
         <header class="chat-header glass">
           <div class="header-info">
-            <h1><i data-lucide="sparkles"></i> INPT Smart ICT Notes</h1>
+            <h1><a href="/" class="home-link" title="Accueil"><i data-lucide="arrow-left"></i></a> INPT Smart ICT Notes</h1>
             <p class="subtitle">Assistant Virtuel RAG propulsé par Ollama</p>
           </div>
           <div class="doc-stats">
@@ -50,12 +50,17 @@
         </div>
 
         <div class="input-container glass">
+          <div id="attachment-chip" class="attachment-chip" hidden>
+            <i data-lucide="file-text"></i>
+            <span id="attachment-name"></span>
+            <button type="button" id="attachment-remove" title="Retirer le fichier"><i data-lucide="x"></i></button>
+          </div>
           <form id="chat-form">
             <select id="topic-select" title="Filtrer par domaine">
               <option value="">Tous les domaines</option>
             </select>
             <input type="file" id="file-input" accept=".pdf,image/*" hidden />
-            <button type="button" id="upload-button" title="Importer un PDF ou une image">
+            <button type="button" id="upload-button" title="Joindre un PDF ou une image">
               <i data-lucide="paperclip"></i>
             </button>
             <input type="text" id="question-input" placeholder="Posez votre question ici (ex: Qu'est-ce que la transformée de Fourier ?)..." autocomplete="off" />
