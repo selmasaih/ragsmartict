@@ -124,6 +124,38 @@ let chatHistory = [];
 let currentController = null;
 let focusedDoc = null; // when set, questions are scoped to this uploaded document
 
+// ── Conversation persistence (survives page refresh) ──────────────────
+const TRANSCRIPT_KEY = 'inpt_transcript';
+let transcript = [];
+
+function saveTranscript() {
+  try {
+    localStorage.setItem(TRANSCRIPT_KEY, JSON.stringify(transcript.slice(-50)));
+  } catch {
+    /* storage full or unavailable — ignore */
+  }
+}
+
+function pushTranscript(role, content) {
+  transcript.push({ role, content });
+  saveTranscript();
+}
+
+function restoreTranscript() {
+  try {
+    transcript = JSON.parse(localStorage.getItem(TRANSCRIPT_KEY) || '[]');
+  } catch {
+    transcript = [];
+  }
+  if (!Array.isArray(transcript) || transcript.length === 0) return;
+  chatBox.innerHTML = '';
+  for (const m of transcript) {
+    if (m.role === 'user') appendMessage('user', `<p>${escapeHtml(m.content)}</p>`);
+    else appendMessage('assistant', renderMarkdown(m.content));
+  }
+  chatHistory = transcript.slice(-6);
+}
+
 // While sending, the send button becomes a stop button.
 function setSendingState(sending) {
   questionInput.disabled = sending;
@@ -363,6 +395,7 @@ chatForm.addEventListener('submit', async (e) => {
   if (file) bubble += `<p class="attached-line"><i data-lucide="file-text"></i> ${escapeHtml(file.name)}</p>`;
   if (question) bubble += `<p>${escapeHtml(question)}</p>`;
   appendMessage('user', bubble);
+  pushTranscript('user', question || `📎 ${file ? file.name : 'document'}`);
   questionInput.value = '';
   setStagedFile(null);
   setSendingState(true);
@@ -383,6 +416,7 @@ chatForm.addEventListener('submit', async (e) => {
       chatHistory.push({ role: 'user', content: question });
       chatHistory.push({ role: 'assistant', content: answer });
       if (chatHistory.length > 6) chatHistory = chatHistory.slice(chatHistory.length - 6);
+      if (answer) pushTranscript('assistant', answer);
     }
   } catch (error) {
     if (error.name !== 'AbortError') {
@@ -401,6 +435,8 @@ if (newChatButton) {
   newChatButton.addEventListener('click', () => {
     if (currentController) currentController.abort();
     chatHistory = [];
+    transcript = [];
+    saveTranscript();
     setFocusedDoc(null);
     chatBox.innerHTML = `
       <div class="message assistant-message">
@@ -412,3 +448,6 @@ if (newChatButton) {
     refreshIcons();
   });
 }
+
+// Restore any saved conversation on load.
+restoreTranscript();
