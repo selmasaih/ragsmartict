@@ -25,7 +25,8 @@ from src.config import (
     ENABLE_QUERY_REWRITE, REWRITE_MAX_WORDS,
     BM25_PAGE_SIZE, BM25_MAX_DOCS, MAX_HISTORY_MESSAGES,
     LLM_PROVIDER, GOOGLE_API_KEY, GEMINI_MODEL, STYLE_FEWSHOT,
-    GROQ_API_KEY, GROQ_MODEL, GROQ_API_URL, GROQ_MAX_TOKENS,
+    GROQ_API_KEY, GROQ_MODEL, GROQ_API_URL, GROQ_MAX_TOKENS, GROQ_FALLBACK_MODEL,
+    UPLOAD_SUBJECT, UPLOAD_TTL_HOURS,
 )
 from src.logger import get_logger
 
@@ -390,9 +391,9 @@ def _groq_messages(prompt: str, system_prompt: str):
     return messages
 
 
-def _groq_payload(prompt: str, system_prompt: str, stream: bool):
+def _groq_payload(prompt: str, system_prompt: str, stream: bool, model: str):
     return {
-        "model": GROQ_MODEL,
+        "model": model,
         "messages": _groq_messages(prompt, system_prompt),
         "temperature": OLLAMA_TEMPERATURE,
         "top_p": OLLAMA_TOP_P,
@@ -401,31 +402,70 @@ def _groq_payload(prompt: str, system_prompt: str, stream: bool):
     }
 
 
+def _groq_models():
+    """Primary model, then the fallback (skipped if identical)."""
+    models = [GROQ_MODEL]
+    if GROQ_FALLBACK_MODEL and GROQ_FALLBACK_MODEL != GROQ_MODEL:
+        models.append(GROQ_FALLBACK_MODEL)
+    return models
+
+
 def _call_groq(prompt: str, system_prompt: str = "") -> str:
     headers = {"Authorization": f"Bearer {GROQ_API_KEY}", "Content-Type": "application/json"}
-    resp = requests.post(GROQ_API_URL, json=_groq_payload(prompt, system_prompt, False),
-                         headers=headers, timeout=60)
-    resp.raise_for_status()
-    return resp.json()["choices"][0]["message"]["content"].strip()
+    last_err = None
+    for model in _groq_models():
+        try:
+            resp = requests.post(GROQ_API_URL, json=_groq_payload(prompt, system_prompt, False, model),
+                                 headers=headers, timeout=60)
+            if resp.status_code == 429:
+                log.warning("Groq 429 on %s — trying fallback", model)
+                last_err = requests.HTTPError("429")
+                continue
+            resp.raise_for_status()
+            body = resp.json()
+            usage = body.get("usage") or {}
+            log.info("Groq[%s] tokens: prompt=%s completion=%s", model,
+                     usage.get("prompt_tokens"), usage.get("completion_tokens"))
+            return body["choices"][0]["message"]["content"].strip()
+        except Exception as e:
+            last_err = e
+    raise last_err
 
 
 def _stream_groq(prompt: str, system_prompt: str = ""):
     headers = {"Authorization": f"Bearer {GROQ_API_KEY}", "Content-Type": "application/json"}
-    with requests.post(GROQ_API_URL, json=_groq_payload(prompt, system_prompt, True),
-                       headers=headers, timeout=60, stream=True) as resp:
-        resp.raise_for_status()
-        for line in resp.iter_lines():
-            if not line:
+    last_err = None
+    for model in _groq_models():
+        produced = False
+        try:
+            resp = requests.post(GROQ_API_URL, json=_groq_payload(prompt, system_prompt, True, model),
+                                 headers=headers, timeout=60, stream=True)
+            if resp.status_code == 429:
+                log.warning("Groq 429 (stream) on %s — trying fallback", model)
+                resp.close()
+                last_err = requests.HTTPError("429")
                 continue
-            data = line.decode("utf-8").removeprefix("data: ").strip()
-            if not data or data == "[DONE]":
-                continue
-            try:
-                delta = json.loads(data)["choices"][0]["delta"].get("content", "")
-            except (json.JSONDecodeError, KeyError, IndexError):
-                continue
-            if delta:
-                yield delta
+            resp.raise_for_status()
+            with resp:
+                for line in resp.iter_lines():
+                    if not line:
+                        continue
+                    data = line.decode("utf-8").removeprefix("data: ").strip()
+                    if not data or data == "[DONE]":
+                        continue
+                    try:
+                        delta = json.loads(data)["choices"][0]["delta"].get("content", "")
+                    except (json.JSONDecodeError, KeyError, IndexError):
+                        continue
+                    if delta:
+                        produced = True
+                        yield delta
+            return
+        except Exception as e:
+            last_err = e
+            if produced:
+                raise  # already streamed partial output — don't retry/duplicate
+    raise last_err
 
 
 # ── Provider dispatch ────────────────────────────────────────────────
@@ -538,16 +578,41 @@ def _get_bm25_index(collection):
     return _BM25_INDEX
 
 
-def add_file_to_index(path: str, subject: str = "Uploads"):
-    """Ingest a single uploaded file into the live collection and invalidate
-    the BM25 cache so it is immediately searchable. Returns (chunks_added, topic)."""
+def add_file_to_index(path: str, subject: str = None, session: str = None):
+    """Ingest a single uploaded file, tagged with the owner's session and an
+    upload timestamp so it stays private and can expire. Returns (n, topic)."""
     from src.ingest import process_file, make_splitter
+    subject = subject or UPLOAD_SUBJECT
     collection = _get_collection()
     model = _get_embedding_model()
-    n, topic = process_file(collection, model, make_splitter(), path, subject)
+    extra_meta = {"uploaded_at": int(time.time())}
+    if session:
+        extra_meta["session"] = session
+    n, topic = process_file(collection, model, make_splitter(), path, subject, extra_meta=extra_meta)
     _invalidate_caches()
-    log.info("Uploaded '%s' -> topic=%s (%d chunks)", path, topic, n)
+    log.info("Uploaded '%s' (session=%s) -> topic=%s (%d chunks)", path, session, topic, n)
     return n, topic
+
+
+def purge_expired_uploads():
+    """Delete upload chunks older than UPLOAD_TTL_HOURS (keeps the shared DB bounded)."""
+    if not UPLOAD_TTL_HOURS:
+        return 0
+    try:
+        collection = _get_collection()
+        cutoff = int(time.time()) - UPLOAD_TTL_HOURS * 3600
+        got = collection.get(
+            where={"$and": [{"subject": {"$eq": UPLOAD_SUBJECT}}, {"uploaded_at": {"$lt": cutoff}}]}
+        )
+        ids = got.get("ids") or []
+        if ids:
+            collection.delete(ids=ids)
+            _invalidate_caches()
+            log.info("Purged %d expired upload chunks", len(ids))
+        return len(ids)
+    except Exception as e:
+        log.warning("Upload purge failed: %s", e)
+        return 0
 
 
 def list_documents() -> list[dict]:
@@ -564,6 +629,8 @@ def list_documents() -> list[dict]:
             break
         for m in metas:
             m = m or {}
+            if m.get("subject") == UPLOAD_SUBJECT:
+                continue  # uploads are private, not part of the shared library
             key = (m.get("filename"), m.get("subject"))
             d = agg.get(key)
             if d is None:
@@ -643,7 +710,8 @@ def _collect_vector_candidates(results):
     return candidates
 
 
-def _collect_bm25_candidates(collection, query_text: str, topic: str = None, filename: str = None):
+def _collect_bm25_candidates(collection, query_text: str, topic: str = None,
+                             filename: str = None, session: str = None):
     try:
         index = _get_bm25_index(collection)
     except Exception:
@@ -654,11 +722,20 @@ def _collect_bm25_candidates(collection, query_text: str, topic: str = None, fil
     order = sorted(range(len(scores)), key=lambda i: scores[i], reverse=True)
     candidates = []
     for idx in order:
-        meta = _BM25_METAS[idx]
-        if topic and (meta or {}).get("topic") != topic:
-            continue
-        if filename and (meta or {}).get("filename") != filename:
-            continue
+        meta = _BM25_METAS[idx] or {}
+        is_upload = meta.get("subject") == UPLOAD_SUBJECT
+        if filename:
+            # Scoped to one document: must match it (and the owner's session).
+            if meta.get("filename") != filename:
+                continue
+            if is_upload and session and meta.get("session") != session:
+                continue
+        else:
+            # Global search never returns private uploads.
+            if is_upload:
+                continue
+            if topic and meta.get("topic") != topic:
+                continue
         doc_id = _make_candidate_id(meta, f"bm25_{idx}")
         candidates.append({"id": doc_id, "doc": _BM25_DOCS[idx], "meta": meta, "score": scores[idx]})
         if len(candidates) >= BM25_K:
@@ -748,9 +825,10 @@ def _ensure_collection_ready():
     return collection, None
 
 
-def _retrieve(collection, question: str, topic: str = None, filename: str = None):
+def _retrieve(collection, question: str, topic: str = None, filename: str = None, session: str = None):
     """Run the full retrieval pipeline. Returns (context_str, sources, retrieved_chunks, timings).
-    When `filename` is set, retrieval is scoped to that single document."""
+    Global search excludes private uploads; with `filename` it scopes to that
+    document (and the owner's `session` for uploads)."""
     timings = {}
 
     t = time.time()
@@ -767,10 +845,15 @@ def _retrieve(collection, question: str, topic: str = None, filename: str = None
     if filename:
         filename = unicodedata.normalize("NFC", filename)
     conds = []
-    if topic:
-        conds.append({"topic": topic})
     if filename:
         conds.append({"filename": filename})
+        if session:
+            conds.append({"session": session})
+    else:
+        # Global search must never surface private uploads.
+        conds.append({"subject": {"$ne": UPLOAD_SUBJECT}})
+        if topic:
+            conds.append({"topic": topic})
     where = None if not conds else (conds[0] if len(conds) == 1 else {"$and": conds})
     with concurrent.futures.ThreadPoolExecutor(max_workers=2) as executor:
         def fetch_vector():
@@ -784,7 +867,8 @@ def _retrieve(collection, question: str, topic: str = None, filename: str = None
 
         def fetch_bm25():
             if BM25_K > 0:
-                return _collect_bm25_candidates(collection, query_text, topic=topic, filename=filename)
+                return _collect_bm25_candidates(collection, query_text, topic=topic,
+                                                filename=filename, session=session)
             return []
 
         future_vector = executor.submit(fetch_vector)
@@ -859,7 +943,8 @@ def _build_user_message(context_str: str, history: list, question: str) -> str:
     return f"{history_str}Contexte:\n{context_str}\n\nQuestion: {question}"
 
 
-def answer_question(question: str, history: list = None, topic: str = None, filename: str = None) -> dict:
+def answer_question(question: str, history: list = None, topic: str = None,
+                    filename: str = None, session: str = None) -> dict:
     """Non-streaming RAG answer."""
     start_time = time.time()
     history = history or []
@@ -875,7 +960,7 @@ def answer_question(question: str, history: list = None, topic: str = None, file
         if cached:
             return {**cached, "latency_ms": int((time.time() - start_time) * 1000), "cached": True}
 
-    context_str, sources, retrieved_chunks, timings = _retrieve(collection, question, topic, filename)
+    context_str, sources, retrieved_chunks, timings = _retrieve(collection, question, topic, filename, session)
     if not retrieved_chunks:
         return {
             "answer": "Aucun document pertinent trouvé dans la base de données.",
@@ -912,7 +997,8 @@ def answer_question(question: str, history: list = None, topic: str = None, file
     return {"answer": answer, "sources": sources, "latency_ms": latency_ms, "timings": timings}
 
 
-def stream_answer(question: str, history: list = None, topic: str = None, filename: str = None):
+def stream_answer(question: str, history: list = None, topic: str = None,
+                  filename: str = None, session: str = None):
     """Generator yielding event dicts for SSE:
        {"type": "token", "text": ...}
        {"type": "sources", "sources": [...]}
@@ -936,7 +1022,7 @@ def stream_answer(question: str, history: list = None, topic: str = None, filena
             yield {"type": "done", "latency_ms": int((time.time() - start_time) * 1000), "cached": True}
             return
 
-    context_str, sources, retrieved_chunks, timings = _retrieve(collection, question, topic, filename)
+    context_str, sources, retrieved_chunks, timings = _retrieve(collection, question, topic, filename, session)
     if not retrieved_chunks:
         yield {"type": "sources", "sources": []}
         yield {"type": "token", "text": "Aucun document pertinent trouvé dans la base de données."}
