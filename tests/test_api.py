@@ -45,7 +45,7 @@ def test_query_too_long_rejected(client, monkeypatch):
 def test_query_happy_path(client, monkeypatch):
     monkeypatch.setattr(
         main, "answer_question",
-        lambda q, history=None, topic=None: {"answer": "ok", "sources": [], "latency_ms": 1},
+        lambda q, history=None, topic=None, filename=None: {"answer": "ok", "sources": [], "latency_ms": 1},
     )
     res = client.post("/api/query", json={"question": "Bonjour ?"})
     assert res.status_code == 200
