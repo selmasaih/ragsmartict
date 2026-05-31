@@ -25,9 +25,9 @@
           <div class="doc-stats">
             <i data-lucide="database"></i>
             <span id="doc-count">...</span> documents indexés
-            <button id="history-button" title="Historique des conversations"><i data-lucide="history"></i></button>
-            <button id="new-chat-button" title="Nouvelle conversation"><i data-lucide="message-square-plus"></i></button>
-            <button id="manage-button" title="Gérer les documents"><i data-lucide="folder-cog"></i></button>
+            <button id="history-button" title="Historique des conversations" aria-label="Historique des conversations"><i data-lucide="history"></i></button>
+            <button id="new-chat-button" title="Nouvelle conversation" aria-label="Nouvelle conversation"><i data-lucide="message-square-plus"></i></button>
+            <button id="manage-button" title="Gérer les documents" aria-label="Gérer les documents"><i data-lucide="folder-cog"></i></button>
           </div>
         </header>
 
@@ -35,8 +35,8 @@
           <div class="docs-panel-header">
             <strong>Conversations</strong>
             <div style="display:flex;gap:6px;">
-              <button id="history-new" title="Nouvelle conversation"><i data-lucide="plus"></i></button>
-              <button id="history-close" title="Fermer"><i data-lucide="x"></i></button>
+              <button id="history-new" title="Nouvelle conversation" aria-label="Nouvelle conversation"><i data-lucide="plus"></i></button>
+              <button id="history-close" title="Fermer" aria-label="Fermer"><i data-lucide="x"></i></button>
             </div>
           </div>
           <div id="history-list" class="docs-list"></div>
@@ -45,13 +45,13 @@
         <div id="docs-panel" class="docs-panel glass" hidden>
           <div class="docs-panel-header">
             <strong>Documents indexés</strong>
-            <button id="docs-close" title="Fermer"><i data-lucide="x"></i></button>
+            <button id="docs-close" title="Fermer" aria-label="Fermer"><i data-lucide="x"></i></button>
           </div>
-          <input type="text" id="docs-filter" placeholder="Filtrer par nom ou domaine…" autocomplete="off" />
+          <input type="text" id="docs-filter" aria-label="Filtrer les documents" placeholder="Filtrer par nom ou domaine…" autocomplete="off" />
           <div id="docs-list" class="docs-list"></div>
         </div>
 
-        <div class="chat-box glass" id="chat-box">
+        <div class="chat-box glass" id="chat-box" role="log" aria-live="polite" aria-label="Conversation">
           <div class="message assistant-message">
             <div class="avatar"><i data-lucide="bot"></i></div>
             <div class="message-content">
@@ -65,23 +65,23 @@
           <div id="focus-banner" class="focus-banner" hidden>
             <i data-lucide="book-open"></i>
             <span>Document actif : <strong id="focus-name"></strong></span>
-            <button type="button" id="focus-clear" title="Revenir à tous les documents"><i data-lucide="x"></i></button>
+            <button type="button" id="focus-clear" title="Revenir à tous les documents" aria-label="Revenir à tous les documents"><i data-lucide="x"></i></button>
           </div>
           <div id="attachment-chip" class="attachment-chip" hidden>
             <i data-lucide="file-text"></i>
             <span id="attachment-name"></span>
-            <button type="button" id="attachment-remove" title="Retirer le fichier"><i data-lucide="x"></i></button>
+            <button type="button" id="attachment-remove" title="Retirer le fichier" aria-label="Retirer le fichier"><i data-lucide="x"></i></button>
           </div>
           <form id="chat-form">
-            <select id="topic-select" title="Filtrer par domaine">
+            <select id="topic-select" title="Filtrer par domaine" aria-label="Filtrer par domaine">
               <option value="">Tous les domaines</option>
             </select>
             <input type="file" id="file-input" accept=".pdf,image/*" hidden />
-            <button type="button" id="upload-button" title="Joindre un PDF ou une image">
+            <button type="button" id="upload-button" title="Joindre un PDF ou une image" aria-label="Joindre un PDF ou une image">
               <i data-lucide="paperclip"></i>
             </button>
-            <input type="text" id="question-input" placeholder="Posez votre question ici (ex: Qu'est-ce que la transformée de Fourier ?)..." autocomplete="off" />
-            <button type="submit" id="send-button">
+            <input type="text" id="question-input" aria-label="Votre question" placeholder="Posez votre question ici (ex: Qu'est-ce que la transformée de Fourier ?)..." autocomplete="off" />
+            <button type="submit" id="send-button" aria-label="Envoyer">
               <i data-lucide="send"></i>
             </button>
           </form>
