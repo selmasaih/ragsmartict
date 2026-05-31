@@ -43,8 +43,13 @@ API_KEY = os.getenv("API_KEY") or None
 # Per-client rate limit for query/upload endpoints (slowapi syntax).
 RATE_LIMIT = os.getenv("RATE_LIMIT", "30/minute")
 
-# ── LLM provider ("ollama" or "gemini") ──────────────────────────────
-LLM_PROVIDER = os.getenv("LLM_PROVIDER", "ollama").lower()  # "ollama" or "gemini"
+# ── LLM provider ("ollama", "gemini" or "groq") ──────────────────────
+LLM_PROVIDER = os.getenv("LLM_PROVIDER", "ollama").lower()
+
+# ── Groq settings (free, fast cloud inference — recommended for deploy) ──
+GROQ_API_KEY = os.getenv("GROQ_API_KEY") or None
+GROQ_MODEL = os.getenv("GROQ_MODEL", "llama-3.1-8b-instant")
+GROQ_API_URL = "https://api.groq.com/openai/v1/chat/completions"
 
 # ── Ollama settings ──────────────────────────────────────────────────
 OLLAMA_MODEL = os.getenv("OLLAMA_MODEL", "llama3.2:3b")
@@ -52,7 +57,8 @@ OLLAMA_MODEL = os.getenv("OLLAMA_MODEL", "llama3.2:3b")
 OLLAMA_API_URL = os.getenv("OLLAMA_API_URL", "http://localhost:11434/api/generate")
 OLLAMA_KEEP_ALIVE = "10m"
 OLLAMA_TIMEOUT_S = _env_int("OLLAMA_TIMEOUT_S", 300)
-OLLAMA_NUM_PREDICT = _env_int("OLLAMA_NUM_PREDICT", 512)
+# Cap output length for speed on CPU (fewer tokens = faster total latency).
+OLLAMA_NUM_PREDICT = _env_int("OLLAMA_NUM_PREDICT", 220)
 OLLAMA_TEMPERATURE = 0.3
 OLLAMA_TOP_P = 0.9
 OLLAMA_TOP_K = 40
@@ -77,8 +83,9 @@ BM25_PAGE_SIZE = 5000
 BM25_MAX_DOCS = _env_int("BM25_MAX_DOCS", 0)
 
 # ── Context window limits ────────────────────────────────────────────
-CONTEXT_MAX_CHARS = 4000          # total context sent to LLM
-CONTEXT_MAX_CHUNK_CHARS = 800     # per-chunk cap
+# Shorter context = faster CPU prompt processing (lower time-to-first-token).
+CONTEXT_MAX_CHARS = _env_int("CONTEXT_MAX_CHARS", 2400)   # total context to LLM
+CONTEXT_MAX_CHUNK_CHARS = 700     # per-chunk cap
 MAX_CHUNKS_PER_DOC = _env_int("MAX_CHUNKS_PER_DOC", 2)  # diversify sources
 
 # ── Query rewrite (DISABLED — saves a full LLM round-trip) ──────────
@@ -95,10 +102,12 @@ STYLE_FEWSHOT = _env_bool("STYLE_FEWSHOT", True)
 def validate() -> list[str]:
     """Return a list of human-readable configuration problems (empty if OK)."""
     problems = []
-    if LLM_PROVIDER not in {"ollama", "gemini"}:
-        problems.append(f"LLM_PROVIDER must be 'ollama' or 'gemini', got '{LLM_PROVIDER}'.")
+    if LLM_PROVIDER not in {"ollama", "gemini", "groq"}:
+        problems.append(f"LLM_PROVIDER must be 'ollama', 'gemini' or 'groq', got '{LLM_PROVIDER}'.")
     if LLM_PROVIDER == "gemini" and not GOOGLE_API_KEY:
         problems.append("LLM_PROVIDER is 'gemini' but GOOGLE_API_KEY is not set.")
+    if LLM_PROVIDER == "groq" and not GROQ_API_KEY:
+        problems.append("LLM_PROVIDER is 'groq' but GROQ_API_KEY is not set.")
     if CHUNK_OVERLAP >= CHUNK_SIZE:
         problems.append("CHUNK_OVERLAP must be smaller than CHUNK_SIZE.")
     return problems
