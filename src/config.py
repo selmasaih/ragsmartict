@@ -73,8 +73,11 @@ COLLECTION_NAME = "inpt_notes"
 
 # ── Retrieval settings ───────────────────────────────────────────────
 TOP_K = 5
-VECTOR_K = 15
-BM25_K = 10
+# Fewer candidates = faster cross-encoder rerank on CPU (the main latency
+# cost once the LLM is on a fast API). ~12 candidates still feed a strong
+# top-5 rerank.
+VECTOR_K = _env_int("VECTOR_K", 8)
+BM25_K = _env_int("BM25_K", 6)
 ENABLE_RERANK = True
 RERANK_TOP_K = 5
 RERANKER_MODEL = "cross-encoder/mmarco-mMiniLMv2-L12-H384-v1"
